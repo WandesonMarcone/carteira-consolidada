@@ -19,3 +19,5 @@ A API do Robô valida o token da conta Supabase antes de responder. Nenhuma chav
 - `PORTFOLIO_WEB_ORIGINS`
 
 A API será exposta apenas em modo de leitura em `/api/v1/assets/<ticker>`.
+
+GitHub Pages configurado para publicar por GitHub Actions.
