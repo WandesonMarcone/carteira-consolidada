@@ -36,13 +36,13 @@ function normalizedList(payload) { return Array.isArray(payload?.data) ? payload
 function eventAdjustedQuantity(p, atDate, events = []) {
   let quantity = 0;
   for (const t of transactions.filter(t => t.ticker === p.ticker && t.asset_type === p.asset_type && t.traded_at <= atDate)) {
-    if (t.operation === "buy") quantity += number(t.quantity);
-    if (t.operation === "sell") quantity -= number(t.quantity);
-    if (t.operation === "adjustment") quantity += number(t.quantity);
-  }
-  for (const event of events) {
-    const day = eventDate(event);
-    if (day && day <= atDate) quantity *= validFactor(event);
+    const signal = t.operation === "sell" ? -1 : (t.operation === "buy" || t.operation === "adjustment" ? 1 : 0);
+    if (!signal) continue;
+    const factor = events.filter(event => {
+      const day = eventDate(event);
+      return day && day >= t.traded_at && day <= atDate;
+    }).reduce((total, event) => total * validFactor(event), 1);
+    quantity += signal * number(t.quantity) * factor;
   }
   return Math.max(0, quantity);
 }
