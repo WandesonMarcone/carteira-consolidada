@@ -13,7 +13,7 @@
   }
   let saved = null;
   try { saved = localStorage.getItem("carteira-theme"); } catch (_) {}
-  apply(saved === "light" ? "light" : "dark");
+  apply(saved === "dark" ? "dark" : "light");
   button.addEventListener("click", () => {
     const next = root.dataset.theme === "light" ? "dark" : "light";
     apply(next);

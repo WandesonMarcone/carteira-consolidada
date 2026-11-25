@@ -37,3 +37,12 @@ class WorkspaceTest(unittest.TestCase):
         self.assertIn('src="./assets/theme.js"', html)
         css = (ROOT / "assets/styles.css").read_text()
         self.assertIn('[data-theme="light"]', css)
+
+    def test_approved_layout(self):
+        html = (ROOT / "index.html").read_text()
+        self.assertIn('class="desktop-nav"', html)
+        self.assertIn('class="bottom-nav"', html)
+        self.assertIn('assets/approved-layout.css', html)
+        self.assertIn('id="method-class" type="hidden" value="stock"', html)
+        self.assertIn('id="asset-method-section"', html)
+        self.assertIn("dash-wealth", self.page.ids)

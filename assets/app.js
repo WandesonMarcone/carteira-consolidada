@@ -93,7 +93,7 @@ function statusText(record) {
 }
 async function loadQuotes() {
   quotes = {};
-  await Promise.all(positions.map(async p => { if (!apiTypes.has(p.asset_type)) return; try { const response = await api(`/api/v1/assets/${encodeURIComponent(p.ticker)}?asset_type=${encodeURIComponent(p.asset_type)}`); const data = response.data || response; if (number(data.price) > 0) quotes[assetKey(p)] = data; } catch (_) {} }));
+  for(let offset=0;offset<positions.length;offset+=5) await Promise.all(positions.slice(offset,offset+5).map(async p => { if (!apiTypes.has(p.asset_type)) return; try { const response = await api(`/api/v1/assets/${encodeURIComponent(p.ticker)}?asset_type=${encodeURIComponent(p.asset_type)}`); const data = response.data || response; if (number(data.price) > 0) quotes[assetKey(p)] = data; } catch (_) {} }));
 }
 async function loadData() {
   const [p, t] = await Promise.all([
@@ -119,16 +119,16 @@ function render() {
   $("#transactions-list").innerHTML = transactions.length ? transactions.slice().reverse().slice(0, 8).map(t => `<li><b>${escape(t.ticker)}</b> • ${operationName(t.operation)} • ${dates.format(new Date(t.traded_at + "T12:00:00"))} • ${money.format(transactionTotal(t))}</li>`).join("") : '<li>Nenhuma transação registrada: TWR e XIRR ficam indisponíveis.</li>';
 }
 function operationName(op) { return ({ buy:"Compra", sell:"Venda", dividend:"Provento", fee:"Custo", adjustment:"Ajuste" })[op] || op; }
-function openPosition(p, selected = null) { $("#position-form").reset(); $("#position-id").value = p?.id || ""; $("#position-title").textContent = p ? "Editar posição" : "Adicionar posição"; if (p) { $("#position-ticker").value = p.ticker; $("#position-type").value = p.asset_type; $("#position-quantity").value = p.quantity; $("#position-average").value = p.average_price; } if (selected) { $("#position-ticker").value=selected.ticker; $("#position-type").value=selected.asset_type; } $("#position-dialog").showModal(); }
+function openPosition(p, selected = null) { $("#position-form").reset(); $("#position-id").value = p?.id || ""; $("#position-title").textContent = p ? "Editar posição" : "Adicionar posição"; if (p) { $("#position-ticker").value = p.ticker; $("#position-type").value = p.asset_type; $("#position-quantity").value = p.quantity; $("#position-average").value = p.average_price; } $("#position-ticker").readOnly=!!selected||!!p; $("#position-type").disabled=!!selected||!!p; if (selected) { $("#position-ticker").value=selected.ticker; $("#position-type").value=selected.asset_type; } $("#position-dialog").showModal(); }
 function openTransaction(p) { $("#transaction-form").reset(); $("#transaction-position").value = p.id; $("#transaction-ticker").value = p.ticker; $("#transaction-type").value = p.asset_type; $("#transaction-date").value = dateISO(new Date()); $("#transaction-title").textContent = `Transação • ${p.ticker}`; $("#transaction-dialog").showModal(); }
 async function personalValuation(p, method) { const result = await supabase.from("personal_valuations").select("*").eq("ticker", p.ticker).eq("asset_type", p.asset_type).eq("method", method).maybeSingle(); return result.data; }
-async function saveValuation(p, method, ceiling, assumptions) { const { error } = await supabase.from("personal_valuations").upsert({ ticker:p.ticker, asset_type:p.asset_type, method, ceiling_price:ceiling, assumptions }, { onConflict:"user_id,ticker,asset_type,method" }); if (error) throw error; }
+async function saveValuation(p, method, ceiling, assumptions) { if(p.asset_type!=="stock")throw new Error("Metodologias somente para ações."); const { error } = await supabase.from("personal_valuations").upsert({ ticker:p.ticker, asset_type:p.asset_type, method, ceiling_price:ceiling, assumptions }, { onConflict:"user_id,ticker,asset_type,method" }); if (error) throw error; }
 async function openAsset(p) {
   window.activeAsset = p;
   $("#asset-add").hidden=!!p.id;
   $("#asset-add").onclick=()=>{ $("#asset-dialog").close(); openPosition(null,p); };
-  $("#asset-valuation").hidden=!["stock","fii"].includes(p.asset_type);
-  $("#asset-valuation").onclick=()=>{ $("#asset-dialog").close(); $("#method-ticker").value=p.ticker; $("#method-class").value=p.asset_type; location.hash="metodologias"; $("#method-search").requestSubmit(); };
+  $("#asset-valuation").hidden=p.asset_type !== "stock"; $("#asset-method-section").hidden=p.asset_type !== "stock";
+  $("#asset-valuation").onclick=()=>{ if(p.asset_type!=="stock")return; $("#asset-dialog").close(); $("#method-ticker").value=p.ticker; $("#method-class").value=p.asset_type; location.hash="metodologias"; $("#method-search").requestSubmit(); };
   $("#asset-identity").replaceChildren(); $("#asset-indicators").replaceChildren(); $("#asset-return").textContent="N/D"; $("#asset-return-detail").textContent="";
   $("#asset-title").textContent = `${p.ticker} • ${types[p.asset_type] || p.asset_type}`; if (!$("#asset-dialog").open) $("#asset-dialog").showModal();
   $("#asset-price-chart").innerHTML = ""; $("#asset-wealth-chart").innerHTML = ""; $("#asset-income").innerHTML = ""; $("#asset-events").innerHTML = ""; $("#asset-methods").innerHTML = ""; message("#asset-status", "Consultando dados autenticados do Robô…");
@@ -136,9 +136,9 @@ async function openAsset(p) {
   let asset = {}, history = [], incomes = [], events = [], performance = {};
   try {
     const type = encodeURIComponent(p.asset_type), ticker = encodeURIComponent(p.ticker), days = Number($("#period").value || 120);
-    const [a,h,i,e,perf] = await Promise.all([api(`/api/v1/assets/${ticker}?asset_type=${type}`), api(`/api/v1/assets/${ticker}/history?asset_type=${type}&days=${days}`), api(`/api/v1/assets/${ticker}/income?asset_type=${type}&days=${days}`), api(`/api/v1/assets/${ticker}/corporate-events?asset_type=${type}&days=${days}`), api(`/api/v1/assets/${ticker}/performance?asset_type=${type}&days=${days}`)]);
-    asset = a.data || a; history = normalizedList(h); incomes = normalizedList(i); events = normalizedList(e); performance = perf.data || perf;
-    const coverage = h.coverage || {}; message("#asset-status", coverage.points ? `${coverage.points} pontos • ${coverage.first_date || "início não informado"} a ${coverage.last_date || "fim não informado"}` : `Período solicitado: ${days} dias. O Robô não retornou série consolidada.`);
+    const results = await Promise.allSettled([api(`/api/v1/assets/${ticker}?asset_type=${type}`), api(`/api/v1/assets/${ticker}/history?asset_type=${type}&days=${days}`), api(`/api/v1/assets/${ticker}/income?asset_type=${type}&days=${days}`), api(`/api/v1/assets/${ticker}/corporate-events?asset_type=${type}&days=${days}`), api(`/api/v1/assets/${ticker}/performance?asset_type=${type}&days=${days}`)]);
+    if(window.activeAsset!==p||!currentUser||!$("#asset-dialog").open)return; const [a,h,i,e,perf]=results.map(r=>r.status==="fulfilled"?r.value:{}); asset = a.data || a; history = normalizedList(h); incomes = normalizedList(i); events = normalizedList(e); performance = perf.data || perf;
+    const coverage = h.coverage || {}; message("#asset-status", results.some(r=>r.status==="rejected") ? "Algumas informações estão indisponíveis na API; dados disponíveis exibidos abaixo." : coverage.points ? `${coverage.points} pontos • ${coverage.first_date || "início não informado"} a ${coverage.last_date || "fim não informado"}` : `Período solicitado: ${days} dias. O Robô não retornou série consolidada.`);
   } catch (error) { message("#asset-status", error.message, true); }
   if (window.activeAsset !== p || !currentUser || !$("#asset-dialog").open) return;
   const identity=$("#asset-identity"); const image=document.createElement("img"); const logo=asset.logo_url||p.logo_url; if (typeof logo==="string"&&logo.startsWith("https://")) { image.src=logo; image.alt="Logo de "+p.ticker; image.referrerPolicy="no-referrer"; image.onerror=()=>image.remove(); identity.append(image); } const info=document.createElement("div"); info.textContent=[asset.name||p.name||p.ticker, asset.classification?.sector||p.sector, asset.price!=null?money.format(asset.price):null].filter(Boolean).join(" • "); identity.append(info);
@@ -156,16 +156,17 @@ function renderIncome(p, incomes, events) {
 function renderEvents(events) { $("#asset-events").innerHTML = events.length ? `<ul class="records">${events.map(e => `<li><b>${escape(e.event_type || e.type || "Evento")}</b> • ${escape(eventDate(e) || "data não informada")} • fator ${validFactor(e)} • ${escape(statusText(e))}</li>`).join("")}</ul>` : '<p class="empty">Nenhum evento corporativo confirmado no período.</p>'; }
 async function renderMethods(p, asset) {
   const container=$("#asset-methods"); container.replaceChildren();
-  if(!["stock","fii"].includes(p.asset_type)){container.innerHTML=unavailable("Metodologias","Classe sem cobertura de valuation no contrato.");return;}
+  if(p.asset_type!=="stock")return;
   const button=document.createElement("button");button.className="primary";button.textContent="Abrir central de metodologias";
   button.onclick=()=>{$("#asset-dialog").close();$("#method-ticker").value=p.ticker;$("#method-class").value=p.asset_type;location.hash="metodologias";$("#method-search").requestSubmit();};
   container.append(button);
 }
-async function openPerformance() {
-  if (!$("#performance-dialog").open) $("#performance-dialog").showModal(); $("#portfolio-twr").textContent = "N/D"; $("#portfolio-xirr").textContent = "N/D"; message("#performance-status", "Calculando apenas com as suas transações e preços da API…"); $("#portfolio-chart").innerHTML = "";
+async function openPerformance(showDialog=true) {
+  if (showDialog===true && !$("#performance-dialog").open) $("#performance-dialog").showModal(); $("#portfolio-twr").textContent = "N/D"; $("#portfolio-xirr").textContent = "N/D"; message("#performance-status", "Calculando apenas com as suas transações e preços da API…"); $("#portfolio-chart").innerHTML = "";
   if (!transactions.length) { message("#performance-status", "Registre transações reais para calcular TWR e XIRR. Nenhum valor foi inventado.", true); return; }
   const days = Number($("#period").value || 120); const series = {}, events = {};
   await Promise.all(positions.filter(p => apiTypes.has(p.asset_type)).map(async p => { const key=assetKey(p), type=encodeURIComponent(p.asset_type), ticker=encodeURIComponent(p.ticker); try { const [h,e] = await Promise.all([api(`/api/v1/assets/${ticker}/history?asset_type=${type}&days=${days}`), api(`/api/v1/assets/${ticker}/corporate-events?asset_type=${type}&days=${days}`)]); series[key] = normalizedList(h); events[key] = normalizedList(e); } catch (_) { series[key] = []; events[key] = []; } }));
+  if (positions.some(p=>!series[assetKey(p)]?.length)) {message("#performance-status","Histórico incompleto para uma ou mais posições; cálculo bloqueado.",true);return;}
   const points = portfolioHistory(series, events); const flows = transactions.map(t => ({ date:t.traded_at, amount:t.operation === "buy" || t.operation === "fee" ? -transactionTotal(t) : t.operation === "sell" || t.operation === "dividend" ? transactionTotal(t) : 0 })).filter(f => f.amount); const last = points.at(-1); if (last) flows.push({ date:last.date, amount:last.value }); const twrValue = twr(points), xirrValue = xirr(flows);
   $("#portfolio-twr").textContent = twrValue == null ? "Indisponível" : `${twrValue.toFixed(2)}%`; $("#portfolio-xirr").textContent = xirrValue == null ? "Indisponível" : `${(xirrValue * 100).toFixed(2)}% a.a.`; $("#portfolio-chart").innerHTML = svgChart(points, "value", "Patrimônio pessoal"); message("#performance-status", points.length ? `Série pessoal: ${points.length} datas. TWR usa fluxo externo no fim do dia; XIRR usa compras, vendas, proventos, custos e valor final.` : "Não há preços históricos suficientes para montar a série pessoal.", !points.length);
 }
@@ -174,7 +175,7 @@ function setupAuth() {
   $("#login-form").onsubmit = async e => { e.preventDefault(); const { error } = await supabase.auth.signInWithPassword({ email:$("#login-email").value, password:$("#login-password").value }); message("#auth-message", error?.message || "", !!error); };
   $("#signup-form").onsubmit = async e => { e.preventDefault(); const { data, error } = await supabase.auth.signUp({ email:$("#signup-email").value, password:$("#signup-password").value, options:{ data:{ full_name:$("#signup-name").value }, emailRedirectTo:window.location.href } }); message("#auth-message", error?.message || (data.session ? "Conta criada." : "Conta criada. Confirme o e-mail."), !!error); };
 }
-$("#new-position").onclick = () => { location.hash="mercado"; }; $("#portfolio-performance").onclick = openPerformance;
+$("#new-position").onclick = () => { location.hash="mercado"; }; $("#portfolio-performance").onclick = () => openPerformance();
 document.querySelectorAll("[data-close]").forEach(button => button.onclick = () => $(button.dataset.close).close());
 $("#period").onchange = () => { if ($("#asset-dialog").open) openAsset(window.activeAsset); };
 $("#position-form").onsubmit = async e => { e.preventDefault(); const id=$("#position-id").value, payload={ ticker:$("#position-ticker").value.trim().toUpperCase(), asset_type:$("#position-type").value, quantity:number($("#position-quantity").value), average_price:number($("#position-average").value) }; const result=id ? await supabase.from("positions").update(payload).eq("id",id) : await supabase.from("positions").insert(payload); if (result.error) return message("#position-message",result.error.message,true); $("#position-dialog").close(); await loadData(); };
