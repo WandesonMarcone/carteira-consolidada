@@ -30,3 +30,10 @@ class WorkspaceTest(unittest.TestCase):
         code = "\n".join((ROOT / p).read_text() for p in ["assets/app.js", "assets/workspace.js"])
         ids = set(re.findall(r'\$\("#([^"]+)"\)', code))
         self.assertEqual(ids - set(self.page.ids), {"logout"}) # criado após login
+
+    def test_theme_switch(self):
+        self.assertIn("theme-toggle", self.page.ids)
+        html = (ROOT / "index.html").read_text()
+        self.assertIn('src="./assets/theme.js"', html)
+        css = (ROOT / "assets/styles.css").read_text()
+        self.assertIn('[data-theme="light"]', css)
