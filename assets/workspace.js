@@ -3,8 +3,8 @@ const $ = s => document.querySelector(s);
 const esc = v => String(v ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const money = new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"});
 const fmt = new Intl.NumberFormat("pt-BR",{maximumFractionDigits:4});
-const titles = {dashboard:"Visão geral",carteira:"Minha carteira",patrimonio:"Patrimônio",rentabilidade:"Rentabilidade",proventos:"Proventos",transacoes:"Transações",composicao:"Composição",metodologias:"Metodologias",mercado:"Mercado"};
-const methods = {GRAHAM:"Graham",BAZIN:"Bazin",GORDON_DDM:"Gordon (DDM)",DCF_FCFF:"Fluxo de caixa descontado (FCFF)",DCF_FCFE:"Fluxo de caixa descontado (FCFE)",LUCRO_RESIDUAL:"Lucro residual",LUCRO_PROJETADO:"Lucro projetado",PETER_LYNCH_PEG:"Peter Lynch (PEG)",DIVIDENDOS_PRECO_TETO:"Preço-teto por dividendos",MULTIPLOS_PARES:"Múltiplos de pares",FII_RENDA:"FII • renda",FII_TIJOLO:"FII • tijolo",FII_PAPEL_CRI:"FII • papel/CRI"};
+const titles = {dashboard:"Visão geral",carteira:"Minha carteira",patrimonio:"Patrimônio",rentabilidade:"Rentabilidade",proventos:"Proventos",transacoes:"Transações",composicao:"Composição",metodologias:"Metodologias para ações",mercado:"Mercado"};
+const methods = {GRAHAM:"Graham",BAZIN:"Bazin",GORDON_DDM:"Gordon (DDM)",DCF_FCFF:"Fluxo de caixa descontado (FCFF)",DCF_FCFE:"Fluxo de caixa descontado (FCFE)",LUCRO_RESIDUAL:"Lucro residual",LUCRO_PROJETADO:"Lucro projetado",PETER_LYNCH_PEG:"Peter Lynch (PEG)",DIVIDENDOS_PRECO_TETO:"Preço-teto por dividendos",MULTIPLOS_PARES:"Múltiplos de pares"};
 let actions, revision=0, catalogRevision=0, catalogClass="stock", catalogPage=1, catalogRows=[], catalogLoaded=false;
 function route(){
   const key=location.hash.slice(1); const page=Object.hasOwn(titles,key)?key:"dashboard";
@@ -24,22 +24,31 @@ export function renderWorkspace({positions,transactions,quotes,types,positionVal
   const groups={}; for(const p of positions){const label=types[p.asset_type]||p.asset_type;groups[label]=(groups[label]||0)+positionValue(p);}
   const list=Object.entries(groups).sort((a,b)=>b[1]-a[1]), total=list.reduce((s,x)=>s+x[1],0);
   const note='<p class="data-note">Estimativa: '+Object.keys(quotes).length+' de '+positions.length+' posições com cotação. Sem cotação, utiliza preço médio.</p>';
-  $("#dash-allocation").innerHTML=bars(list,total)+note; $("#full-allocation").innerHTML=bars(list,total)+note;
+  $("#dash-allocation").innerHTML=donut(list,total)+note; $("#full-allocation").innerHTML=bars(list,total)+note;
   const income=transactions.filter(t=>t.operation==="dividend"); const months={};for(const t of income){const key=t.traded_at.slice(0,7);months[key]=(months[key]||0)+transactionTotal(t);}
+  const limit=new Date();limit.setFullYear(limit.getFullYear()-1);const cutoff=limit.toISOString().slice(0,10);
+  $("#dash-income-total").textContent=money.format(income.filter(t=>t.traded_at>=cutoff&&t.traded_at<=new Date().toISOString().slice(0,10)).reduce((s,t)=>s+transactionTotal(t),0));
+  $("#dash-transactions").innerHTML=table(["Ativo","Operação","Valor"],transactions.slice().reverse().slice(0,5).map(t=>[t.ticker,operationName(t.operation),money.format(transactionTotal(t))]));
   const monthly=Object.entries(months).sort((a,b)=>a[0].localeCompare(b[0]));const sum=income.reduce((s,t)=>s+transactionTotal(t),0);
   $("#dash-income").innerHTML='<strong class="hero-value">'+money.format(sum)+'</strong><p>Total registrado em todos os períodos</p>'+bars(monthly.slice(-6),sum);
   $("#income-chart").innerHTML=bars(monthly.slice(-12),sum);
   $("#income-table").innerHTML=table(["Data","Ativo","Valor recebido"],income.slice().reverse().map(t=>[t.traded_at,t.ticker,money.format(transactionTotal(t))]));
   $("#transaction-table").innerHTML=table(["Data","Ativo","Operação","Quantidade","Valor"],transactions.slice().reverse().map(t=>[t.traded_at,t.ticker,operationName(t.operation),t.quantity??"—",money.format(transactionTotal(t))]));
 }
+function donut(items,total){
+ if(!(total>0)||items.some(x=>x[1]<0))return bars(items,total);
+ const colors=["#174837","#C5A45D","#8BA48D","#66776A","#D6D2C5","#896F47","#477E72"];let at=0;
+ const legend=items.map(([label,value],i)=>{const start=at;at+=100*value/total;return {label,value,start,end:at,color:colors[i%colors.length]};});
+ return '<div class="donutbox"><div class="donut" style="background:conic-gradient('+legend.map(x=>x.color+" "+x.start+"% "+x.end+"%").join(",")+')"><span>'+esc(money.format(total))+'</span></div><div class="donut-legend">'+legend.map(x=>'<div><i style="background:'+x.color+'"></i><span>'+esc(x.label)+'</span><b>'+fmt.format(100*x.value/total)+'%</b></div>').join("")+'</div></div>';
+}
 function printable(v){return v==null?"N/D":Array.isArray(v)?v.join(", "):typeof v==="object"?JSON.stringify(v):String(v);}
 async function searchMethods(e){
-  e.preventDefault();const ticket=++revision;const ticker=$("#method-ticker").value.trim().toUpperCase(), type=$("#method-class").value;const p={ticker,asset_type:type};
+  e.preventDefault();if($("#method-class").value!=="stock"){ $("#method-status").textContent="Metodologias disponíveis apenas para ações."; return; }const ticket=++revision;const ticker=$("#method-ticker").value.trim().toUpperCase(), type="stock";const p={ticker,asset_type:type};
   const path="/api/v1/assets/"+encodeURIComponent(ticker);$("#method-status").textContent="Consultando "+ticker+"…";for(const id of ["method-cards","method-quote","method-facts"])$("#"+id).replaceChildren();
   const result=await Promise.allSettled([actions.api(path+"?asset_type="+type),actions.api(path+"/coverage"),actions.api(path+"/fundamentals?years=5")]);
   if(ticket!==revision)return;
   const [quote,coverage,facts]=result.map(r=>r.status==="fulfilled"?r.value:null);
-  const asset=quote?.data, rows=(Array.isArray(coverage?.data)?coverage.data:[]).filter(r=>r.classe===(type==="stock"?"ACAO":"FII"));
+  const asset=quote?.data, rows=(Array.isArray(coverage?.data)?coverage.data:[]).filter(r=>r.classe==="ACAO");
   $("#method-status").textContent=rows.length?rows.length+" metodologias com cobertura registrada.":"Não foi retornada cobertura para esta classe. Cálculos bloqueados.";
   if(result.some(r=>r.status==="rejected"))$("#method-status").textContent+=" Uma ou mais consultas falharam.";
   $("#method-quote").innerHTML=asset?.price!=null?'<div class="method-price">Cotação de '+esc(ticker)+' <strong>'+money.format(asset.price)+'</strong><small>Referência: '+esc(asset.updated_at||"não informada")+'</small></div>':"";
@@ -70,6 +79,7 @@ async function searchMethods(e){
     const calc=()=>{const v=params();if(Object.values(v).some(x=>!Number.isFinite(x))||v.margin<0||v.margin>99)return null;const fair=calculate(v);return Number.isFinite(fair)&&fair>0?{fair,ceiling:fair*(1-v.margin/100),v}:null;};
     const update=()=>{const c=calc();box.querySelector(".ceiling").textContent=c?"Valor calculado: "+money.format(c.fair)+" • Preço-teto: "+money.format(c.ceiling):"Informe premissas válidas.";box.querySelector("button").disabled=!c;};box.querySelectorAll("input").forEach(input=>input.oninput=update);update();
     const key=r.metodo.toLowerCase();
+    if(key!=="graham"){box.querySelector("button").hidden=true;box.querySelector(".message").textContent="Cálculo disponível; salvamento depende de atualização do schema Supabase.";continue;}
     box.querySelector("button").onclick=async()=>{const c=calc();if(!c)return;try{await actions.saveValuation(p,key,c.ceiling,{formula,...base,...c.v});box.querySelector(".message").textContent="Preço-teto salvo.";}catch{box.querySelector(".message").textContent="Não foi possível salvar.";}};
     try{const saved=await actions.personalValuation(p,key);if(ticket!==revision)return;if(saved?.ceiling_price!=null)box.querySelector(".message").textContent="Preço-teto salvo anteriormente: "+money.format(saved.ceiling_price);}catch{}
 
@@ -113,6 +123,7 @@ async function loadCatalog(){
   }
 }
 function setupCatalog(){
+  $("#pick-stock").onclick=()=>{catalogClass="stock";catalogPage=1;$("#catalog-search").value="";$("#catalog-sector").value="";document.querySelectorAll("[data-market-class]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.marketClass==="stock")));catalogLoaded=false;location.hash="mercado";};
   $("#catalog-manual").onclick=()=>actions.openPosition();
   document.querySelectorAll("[data-market-class]").forEach(b=>b.onclick=()=>{catalogClass=b.dataset.marketClass;catalogPage=1;$("#catalog-sector").value="";document.querySelectorAll("[data-market-class]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));loadCatalog();});
   let timer;$("#catalog-search").oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>{catalogPage=1;loadCatalog();},300);};
@@ -125,5 +136,5 @@ function setupCatalog(){
   $("#sheet-logout").onclick=()=>{$("#nav-sheet").close();actions.logout();};
 }
 
-export function setupWorkspace(opts){actions=opts;setupCatalog();window.addEventListener("hashchange",route);route();$("#position-search").oninput=opts.render;$("#position-filter").onchange=opts.render;$("#method-search").onsubmit=searchMethods;$("#market-refresh").onclick=market;document.querySelectorAll(".history-trigger").forEach(b=>b.onclick=async()=>{await opts.openPerformance();$("#wealth-inline").innerHTML=$("#portfolio-chart").innerHTML;$("#wealth-status").textContent=$("#performance-status").textContent;$("#return-status").textContent=$("#performance-status").textContent;$("#twr-inline").textContent=$("#portfolio-twr").textContent;$("#xirr-inline").textContent=$("#portfolio-xirr").textContent;});}
-export function resetWorkspace(){revision++;catalogRevision++;catalogLoaded=false;catalogRows=[];catalogPage=1;$("#catalog-list").replaceChildren();$("#catalog-status").textContent="";$("#profile-email").textContent="";for(const id of ["method-cards","method-quote","method-facts","method-status","market-overview","wealth-inline","wealth-status","return-status","twr-inline","xirr-inline","dash-allocation","full-allocation","dash-income","income-chart","income-table","transaction-table","positions-list","transactions-list"])$("#"+id)?.replaceChildren();document.querySelectorAll("dialog[open]").forEach(d=>d.close());location.hash="dashboard";}
+export function setupWorkspace(opts){actions=opts;setupCatalog();window.addEventListener("hashchange",route);route();$("#position-search").oninput=opts.render;$("#position-filter").onchange=opts.render;$("#method-search").onsubmit=searchMethods;$("#market-refresh").onclick=market;document.querySelectorAll(".history-trigger").forEach(b=>b.onclick=async()=>{await opts.openPerformance(false);$("#wealth-inline").innerHTML=$("#portfolio-chart").innerHTML;$("#wealth-status").textContent=$("#performance-status").textContent;$("#return-status").textContent=$("#performance-status").textContent;$("#twr-inline").textContent=$("#portfolio-twr").textContent;$("#xirr-inline").textContent=$("#portfolio-xirr").textContent;$("#dash-wealth").innerHTML=$("#portfolio-chart").innerHTML;$("#dash-return").textContent=$("#portfolio-twr").textContent;$("#dash-history-status").textContent=$("#performance-status").textContent;});}
+export function resetWorkspace(){revision++;catalogRevision++;catalogLoaded=false;catalogRows=[];catalogPage=1;$("#catalog-list").replaceChildren();$("#catalog-status").textContent="";$("#profile-email").textContent="";for(const id of ["dash-return","dash-wealth","dash-history-status","dash-income-total","dash-transactions","method-cards","method-quote","method-facts","method-status","market-overview","wealth-inline","wealth-status","return-status","twr-inline","xirr-inline","dash-allocation","full-allocation","dash-income","income-chart","income-table","transaction-table","positions-list","transactions-list"])$("#"+id)?.replaceChildren();document.querySelectorAll("dialog[open]").forEach(d=>d.close());location.hash="dashboard";}
