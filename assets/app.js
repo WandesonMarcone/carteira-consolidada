@@ -147,10 +147,11 @@ function renderIncome(p, incomes, events) {
 }
 function renderEvents(events) { $("#asset-events").innerHTML = events.length ? `<ul class="records">${events.map(e => `<li><b>${escape(e.event_type || e.type || "Evento")}</b> • ${escape(eventDate(e) || "data não informada")} • fator ${validFactor(e)} • ${escape(statusText(e))}</li>`).join("")}</ul>` : '<p class="empty">Nenhum evento corporativo confirmado no período.</p>'; }
 async function renderMethods(p, asset) {
-  const indicators = asset.indicators || {}; const lpa = number(indicators.lpa), vpa = number(indicators.vpa); const list = [];
-  if (p.asset_type === "stock" && lpa > 0 && vpa > 0) { const graham = Math.sqrt(22.5 * lpa * vpa); const saved = await personalValuation(p, "graham"); list.push(`<article class="valuation"><span>Graham</span><strong>${money.format(graham)}</strong><span>LPA ${money.format(lpa)} • VPA ${money.format(vpa)}${saved?.ceiling_price != null ? ` • seu teto ${money.format(saved.ceiling_price)}` : ""}</span><button class="secondary save-method" data-method="graham" data-value="${graham}">Salvar como meu teto</button></article>`); } else { list.push(unavailable("Graham", "Exige ação com LPA e VPA positivos, válidos e no mesmo período.")); }
-  list.push(unavailable("Bazin, DCF, Gordon, Lynch e múltiplos", "O Robô ainda não possui todos os fundamentos estruturados e históricos exigidos. Nada foi estimado."));
-  $("#asset-methods").innerHTML = list.join(""); document.querySelectorAll(".save-method").forEach(button => button.onclick = async () => { const value = Number(prompt("Preço-teto pessoal (R$):", Number(button.dataset.value).toFixed(2))); if (!Number.isFinite(value) || value < 0) return; try { await saveValuation(p, button.dataset.method, value, { formula:"sqrt(22.5*LPA*VPA)", saved_at:new Date().toISOString() }); button.textContent = "Preço-teto salvo"; } catch (_) { alert("Não foi possível salvar o preço-teto."); } });
+  const container=$("#asset-methods"); container.replaceChildren();
+  if(!["stock","fii"].includes(p.asset_type)){container.innerHTML=unavailable("Metodologias","Classe sem cobertura de valuation no contrato.");return;}
+  const button=document.createElement("button");button.className="primary";button.textContent="Abrir central de metodologias";
+  button.onclick=()=>{$("#asset-dialog").close();$("#method-ticker").value=p.ticker;$("#method-class").value=p.asset_type;location.hash="metodologias";$("#method-search").requestSubmit();};
+  container.append(button);
 }
 async function openPerformance() {
   if (!$("#performance-dialog").open) $("#performance-dialog").showModal(); $("#portfolio-twr").textContent = "N/D"; $("#portfolio-xirr").textContent = "N/D"; message("#performance-status", "Calculando apenas com as suas transações e preços da API…"); $("#portfolio-chart").innerHTML = "";

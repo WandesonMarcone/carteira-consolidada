@@ -4,7 +4,7 @@ const esc = v => String(v ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",
 const money = new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"});
 const fmt = new Intl.NumberFormat("pt-BR",{maximumFractionDigits:4});
 const titles = {dashboard:"Visão geral",carteira:"Minha carteira",patrimonio:"Patrimônio",rentabilidade:"Rentabilidade",proventos:"Proventos",transacoes:"Transações",composicao:"Composição",metodologias:"Metodologias",mercado:"Mercado"};
-const methods = {GRAHAM:"Graham",BAZIN:"Bazin",GORDON_DDM:"Gordon (DDM)",DCF_FCFF:"Fluxo de caixa descontado (FCFF)",DCF_FCFE:"Fluxo de caixa descontado (FCFE)",LUCRO_RESIDUAL:"Lucro residual",LUCRO_PROJETADO:"Lucro projetado",LYNCH:"Peter Lynch"};
+const methods = {GRAHAM:"Graham",BAZIN:"Bazin",GORDON_DDM:"Gordon (DDM)",DCF_FCFF:"Fluxo de caixa descontado (FCFF)",DCF_FCFE:"Fluxo de caixa descontado (FCFE)",LUCRO_RESIDUAL:"Lucro residual",LUCRO_PROJETADO:"Lucro projetado",PETER_LYNCH_PEG:"Peter Lynch (PEG)",DIVIDENDOS_PRECO_TETO:"Preço-teto por dividendos",MULTIPLOS_PARES:"Múltiplos de pares",FII_RENDA:"FII • renda",FII_TIJOLO:"FII • tijolo",FII_PAPEL_CRI:"FII • papel/CRI"};
 let actions, revision=0;
 function route(){
   const key=location.hash.slice(1); const page=Object.hasOwn(titles,key)?key:"dashboard";
@@ -45,14 +45,30 @@ async function searchMethods(e){
     const card=document.createElement("article");card.className="valuation method-card";
     card.innerHTML='<span>'+esc(methods[r.metodo]||r.metodo)+'</span><strong>'+esc(r.status.replaceAll("_"," "))+'</strong><span>Anos disponíveis: '+esc(r.anos_disponiveis??"N/D")+'</span><span>Faltam: '+esc(printable(r.campos_ausentes))+'</span><span>'+esc(r.observacao||"")+'</span>';
     $("#method-cards").append(card);
-    // Graham: apenas LPA/VPA derivados, anuais, mesmo período e cobertura PRONTO.
-    if(type!=="stock"||r.metodo!=="GRAHAM"||r.status!=="PRONTO")continue;
+    if(type!=="stock"||!["PRONTO","PREMISSAS_NECESSARIAS"].includes(r.status))continue;
     const annual=derived.filter(x=>["ANUAL","DFP"].includes(String(x.periodicidade).toUpperCase()));
-    const pairs=annual.filter(x=>String(x.indicador).toUpperCase()==="LPA"&&Number(x.valor)>0).sort((a,b)=>String(b.periodo_fim).localeCompare(String(a.periodo_fim)));
-    const lpa=pairs.find(x=>annual.some(y=>String(y.indicador).toUpperCase()==="VPA"&&y.periodo_fim===x.periodo_fim&&Number(y.valor)>0));const vpa=lpa&&annual.find(y=>String(y.indicador).toUpperCase()==="VPA"&&y.periodo_fim===lpa.periodo_fim&&Number(y.valor)>0);
-    if(!lpa||!vpa){card.insertAdjacentHTML("beforeend","<p>Par anual LPA/VPA não disponível.</p>");continue;}
-    const fair=Math.sqrt(22.5*Number(lpa.valor)*Number(vpa.valor));const box=document.createElement("div");box.innerHTML='<p>Valor de Graham: <b>'+money.format(fair)+'</b> • '+esc(lpa.periodo_fim)+'</p><label>Margem de segurança (%) <input type="number" min="0" max="99" step="1" value="0"></label><p class="ceiling"></p><button class="secondary" type="button">Salvar preço-teto</button><p class="message" role="status"></p>';card.append(box);const input=box.querySelector("input");const calc=()=>{const m=Number(input.value);return input.value!==""&&m>=0&&m<=99?fair*(1-m/100):null;};const update=()=>{const c=calc();box.querySelector(".ceiling").textContent=c==null?"Margem inválida":"Preço-teto: "+money.format(c);};input.oninput=update;update();
-    box.querySelector("button").onclick=async()=>{const c=calc();if(c==null)return;try{await actions.saveValuation(p,"graham",c,{formula:"sqrt(22.5*LPA*VPA)",period:lpa.periodo_fim,lpa:lpa.valor,vpa:vpa.valor,margin_percent:Number(input.value)});box.querySelector(".message").textContent="Preço-teto salvo.";}catch{box.querySelector(".message").textContent="Não foi possível salvar.";}};
+    const latest=(key,day)=>annual.filter(x=>String(x.indicador).toUpperCase()===key&&x.valor!=null&&Number.isFinite(Number(x.valor))&&(!day||x.periodo_fim===day)).sort((a,b)=>String(b.periodo_fim).localeCompare(String(a.periodo_fim)))[0];
+    let fields=[],base, formula, calculate;
+    if(r.metodo==="GRAHAM"){
+      const lpa=latest("LPA"),vpa=lpa&&latest("VPA",lpa.periodo_fim);
+      if(lpa&&vpa&&Number(lpa.valor)>0&&Number(vpa.valor)>0){base={period:lpa.periodo_fim,lpa:lpa.valor,vpa:vpa.valor};formula="sqrt(22.5*LPA*VPA)";calculate=()=>Math.sqrt(22.5*Number(lpa.valor)*Number(vpa.valor));}
+    }else if(["BAZIN","DIVIDENDOS_PRECO_TETO","GORDON_DDM"].includes(r.metodo)){
+      const dpa=latest("DPA");
+      if(dpa&&Number(dpa.valor)>0){
+        base={period:dpa.periodo_fim,dpa:dpa.valor};
+        if(r.metodo==="GORDON_DDM"){fields=[["growth","Crescimento anual (%)",""],["rate","Custo de capital (%)",""]];formula="DPA*(1+g)/(k-g)";calculate=v=>v.rate>v.growth&&v.rate>0&&v.growth>-100?Number(dpa.valor)*(1+v.growth/100)/((v.rate-v.growth)/100):null;}
+        else{fields=[["rate","Dividend yield exigido (%)",""]];formula="DPA/yield";calculate=v=>v.rate>0?Number(dpa.valor)/(v.rate/100):null;}
+      }
+    }else{card.insertAdjacentHTML("beforeend","<p>Calculadora específica ainda não implementada.</p>");continue;}
+    if(!calculate){card.insertAdjacentHTML("beforeend","<p>Dados anuais compatíveis não disponíveis.</p>");continue;}
+    const box=document.createElement("div");box.innerHTML='<p>Base: '+esc(base.period)+' • '+esc(formula)+'</p>'+fields.map(([key,label,value])=>'<label>'+esc(label)+'<input data-param="'+key+'" type="number" step="any" value="'+value+'"></label>').join("")+'<label>Margem de segurança (%)<input data-param="margin" type="number" min="0" max="99" step="any" value="0"></label><p class="ceiling"></p><button class="secondary" type="button">Salvar preço-teto</button><p class="message" role="status"></p>';card.append(box);
+    const params=()=>Object.fromEntries([...box.querySelectorAll("input")].map(input=>[input.dataset.param,input.value.trim()===""?NaN:Number(input.value)]));
+    const calc=()=>{const v=params();if(Object.values(v).some(x=>!Number.isFinite(x))||v.margin<0||v.margin>99)return null;const fair=calculate(v);return Number.isFinite(fair)&&fair>0?{fair,ceiling:fair*(1-v.margin/100),v}:null;};
+    const update=()=>{const c=calc();box.querySelector(".ceiling").textContent=c?"Valor calculado: "+money.format(c.fair)+" • Preço-teto: "+money.format(c.ceiling):"Informe premissas válidas.";box.querySelector("button").disabled=!c;};box.querySelectorAll("input").forEach(input=>input.oninput=update);update();
+    const key=r.metodo.toLowerCase();
+    box.querySelector("button").onclick=async()=>{const c=calc();if(!c)return;try{await actions.saveValuation(p,key,c.ceiling,{formula,...base,...c.v});box.querySelector(".message").textContent="Preço-teto salvo.";}catch{box.querySelector(".message").textContent="Não foi possível salvar.";}};
+    try{const saved=await actions.personalValuation(p,key);if(ticket!==revision)return;if(saved?.ceiling_price!=null)box.querySelector(".message").textContent="Preço-teto salvo anteriormente: "+money.format(saved.ceiling_price);}catch{}
+
   }
 }
 async function market(){const ticket=revision;$("#market-overview").textContent="Consultando…";try{const r=await actions.api("/api/v1/market/overview");if(ticket!==revision)return;const data=r.data;const flatten=(v,p="",depth=0)=>v!==null&&typeof v==="object"&&depth<5?Object.entries(v).flatMap(([k,x])=>flatten(x,p?p+" / "+k:k,depth+1)):[[p,printable(v)]];$("#market-overview").innerHTML=table(["Indicador","Valor"],data?flatten(data):[]);}catch(e){if(ticket===revision)$("#market-overview").textContent=e.message;}}
