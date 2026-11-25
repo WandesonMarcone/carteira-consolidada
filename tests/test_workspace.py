@@ -64,3 +64,11 @@ class WorkspaceTest(unittest.TestCase):
         code = (ROOT / "assets/app.js").read_text()
         self.assertIn("for(let offset=0;offset<assets.length;offset+=4)", code)
         self.assertNotIn("Promise.all(positions.filter(p => apiTypes.has(p.asset_type)).map", code)
+
+    def test_projected_profit_can_use_dividend_yield_ceiling(self):
+        code = (ROOT / "assets/workspace.js").read_text()
+        self.assertIn('data-param="basis"><option value="earnings">', code)
+        self.assertIn('<option value="dividend">DPA projetado ÷ yield desejado', code)
+        self.assertIn('dpaProjected/(v.yield/100)', code)
+        self.assertIn('input("yield","Yield desejado para preço-teto por dividendos (%)"', code)
+        self.assertIn('LPA projetado: ', code)
