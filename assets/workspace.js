@@ -4,7 +4,9 @@ const esc = v => String(v ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",
 const money = new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"});
 const fmt = new Intl.NumberFormat("pt-BR",{maximumFractionDigits:4});
 const titles = {dashboard:"Visão geral",carteira:"Minha carteira",patrimonio:"Patrimônio",rentabilidade:"Rentabilidade",proventos:"Proventos",transacoes:"Transações",composicao:"Composição",metodologias:"Metodologias para ações",mercado:"Mercado"};
-const methods = {GRAHAM:"Graham",BAZIN:"Bazin",GORDON_DDM:"Gordon (DDM)",DCF_FCFF:"Fluxo de caixa descontado (FCFF)",DCF_FCFE:"Fluxo de caixa descontado (FCFE)",LUCRO_RESIDUAL:"Lucro residual",LUCRO_PROJETADO:"Lucro projetado",PETER_LYNCH_PEG:"Peter Lynch (PEG)",DIVIDENDOS_PRECO_TETO:"Preço-teto por dividendos",MULTIPLOS_PARES:"Múltiplos de pares"};
+// Escopo acordado para valuation de ações; evita expor metodologias não solicitadas.
+const methods = {GRAHAM:"Graham",BAZIN:"Bazin",GORDON_DDM:"Gordon",LUCRO_PROJETADO:"Projeção de lucros",PETER_LYNCH_PEG:"Peter Lynch",MULTIPLOS_PARES:"Múltiplos do setor"};
+const visibleMethods = new Set(Object.keys(methods));
 let actions, revision=0, catalogRevision=0, catalogClass="stock", catalogPage=1, catalogRows=[], catalogLoaded=false;
 function route(){
   const key=location.hash.slice(1); const page=Object.hasOwn(titles,key)?key:"dashboard";
@@ -48,41 +50,45 @@ async function searchMethods(e){
   const result=await Promise.allSettled([actions.api(path+"?asset_type="+type),actions.api(path+"/coverage"),actions.api(path+"/fundamentals?years=5")]);
   if(ticket!==revision)return;
   const [quote,coverage,facts]=result.map(r=>r.status==="fulfilled"?r.value:null);
-  const asset=quote?.data, rows=(Array.isArray(coverage?.data)?coverage.data:[]).filter(r=>r.classe==="ACAO");
+  const asset=quote?.data, rows=(Array.isArray(coverage?.data)?coverage.data:[]).filter(r=>r.classe==="ACAO"&&visibleMethods.has(r.metodo));
   $("#method-status").textContent=rows.length?rows.length+" metodologias com cobertura registrada.":"Não foi retornada cobertura para esta classe. Cálculos bloqueados.";
   if(result.some(r=>r.status==="rejected"))$("#method-status").textContent+=" Uma ou mais consultas falharam.";
   $("#method-quote").innerHTML=asset?.price!=null?'<div class="method-price">Cotação de '+esc(ticker)+' <strong>'+money.format(asset.price)+'</strong><small>Referência: '+esc(asset.updated_at||"não informada")+'</small></div>':"";
   const derived=facts?.data?.derived_indicators||[];const observed=facts?.data?.facts||[];
   $("#method-facts").innerHTML=table(["Período","Indicador","Valor","Unidade","Qualidade"],derived.slice().reverse().map(x=>[x.periodo_fim,x.indicador,x.valor==null?"N/D":fmt.format(x.valor),x.unidade,x.qualidade]))+'<details><summary>Fatos contábeis ('+observed.length+')</summary>'+table(["Período","Métrica","Valor","Unidade","Fonte"],observed.slice().reverse().map(x=>[x.periodo_fim,x.metrica,x.valor==null?"N/D":fmt.format(x.valor),x.unidade,x.fonte]))+'</details>';
+  const annual=derived.filter(x=>["ANUAL","DFP"].includes(String(x.periodicidade).toUpperCase()));
+  const series=key=>annual.filter(x=>String(x.indicador).toUpperCase()===key&&x.valor!=null&&Number.isFinite(Number(x.valor))).sort((a,b)=>String(a.periodo_fim).localeCompare(String(b.periodo_fim)));
+  const latest=key=>series(key).at(-1);
+  const presets=(key,values)=>'<div class="preset-row" aria-label="Sugestões">'+values.map(v=>'<button class="secondary" type="button" data-preset="'+key+'" data-value="'+v+'">'+v+'%</button>').join("")+'</div>';
+  const input=(key,label,value="",min="",max="",step="any")=>'<label>'+esc(label)+'<input data-param="'+key+'" type="number" step="'+step+'" '+(min!==""?'min="'+min+'" ':'')+(max!==""?'max="'+max+'" ':'')+'value="'+value+'"></label>';
   for(const r of rows){
     const card=document.createElement("article");card.className="valuation method-card";
-    card.innerHTML='<span>'+esc(methods[r.metodo]||r.metodo)+'</span><strong>'+esc(r.status.replaceAll("_"," "))+'</strong><span>Anos disponíveis: '+esc(r.anos_disponiveis??"N/D")+'</span><span>Faltam: '+esc(printable(r.campos_ausentes))+'</span><span>'+esc(r.observacao||"")+'</span>';
+    card.innerHTML='<span>'+esc(methods[r.metodo]||r.metodo)+'</span><strong>'+esc(r.status.replaceAll("_"," "))+'</strong><span>Histórico: '+esc(r.anos_disponiveis??"N/D")+' exercícios</span><span>Dados faltantes: '+esc(printable(r.campos_ausentes))+'</span><span>'+esc(r.observacao||"")+'</span>';
     $("#method-cards").append(card);
-    if(type!=="stock"||!["PRONTO","PREMISSAS_NECESSARIAS"].includes(r.status))continue;
-    const annual=derived.filter(x=>["ANUAL","DFP"].includes(String(x.periodicidade).toUpperCase()));
-    const latest=(key,day)=>annual.filter(x=>String(x.indicador).toUpperCase()===key&&x.valor!=null&&Number.isFinite(Number(x.valor))&&(!day||x.periodo_fim===day)).sort((a,b)=>String(b.periodo_fim).localeCompare(String(a.periodo_fim)))[0];
-    let fields=[],base, formula, calculate;
-    if(r.metodo==="GRAHAM"){
-      const lpa=latest("LPA"),vpa=lpa&&latest("VPA",lpa.periodo_fim);
-      if(lpa&&vpa&&Number(lpa.valor)>0&&Number(vpa.valor)>0){base={period:lpa.periodo_fim,lpa:lpa.valor,vpa:vpa.valor};formula="sqrt(22.5*LPA*VPA)";calculate=()=>Math.sqrt(22.5*Number(lpa.valor)*Number(vpa.valor));}
-    }else if(["BAZIN","DIVIDENDOS_PRECO_TETO","GORDON_DDM"].includes(r.metodo)){
-      const dpa=latest("DPA");
-      if(dpa&&Number(dpa.valor)>0){
-        base={period:dpa.periodo_fim,dpa:dpa.valor};
-        if(r.metodo==="GORDON_DDM"){fields=[["growth","Crescimento anual (%)",""],["rate","Custo de capital (%)",""]];formula="DPA*(1+g)/(k-g)";calculate=v=>v.rate>v.growth&&v.rate>0&&v.growth>-100?Number(dpa.valor)*(1+v.growth/100)/((v.rate-v.growth)/100):null;}
-        else{fields=[["rate","Dividend yield exigido (%)",""]];formula="DPA/yield";calculate=v=>v.rate>0?Number(dpa.valor)/(v.rate/100):null;}
-      }
-    }else{card.insertAdjacentHTML("beforeend","<p>Calculadora específica ainda não implementada.</p>");continue;}
-    if(!calculate){card.insertAdjacentHTML("beforeend","<p>Dados anuais compatíveis não disponíveis.</p>");continue;}
-    const box=document.createElement("div");box.innerHTML='<p>Base: '+esc(base.period)+' • '+esc(formula)+'</p>'+fields.map(([key,label,value])=>'<label>'+esc(label)+'<input data-param="'+key+'" type="number" step="any" value="'+value+'"></label>').join("")+'<label>Margem de segurança (%)<input data-param="margin" type="number" min="0" max="99" step="any" value="0"></label><p class="ceiling"></p><button class="secondary" type="button">Salvar preço-teto</button><p class="message" role="status"></p>';card.append(box);
-    const params=()=>Object.fromEntries([...box.querySelectorAll("input")].map(input=>[input.dataset.param,input.value.trim()===""?NaN:Number(input.value)]));
+    let base={},formula="",calculate=null,body="",key=r.metodo.toLowerCase();
+    const lpa=latest("LPA"),vpa=lpa&&series("VPA").find(x=>x.periodo_fim===lpa.periodo_fim),dpa=latest("DPA"),payout=latest("PAYOUT"),growthHistorical=latest("CRESCIMENTO_LPA_5A");
+    if(r.metodo==="GRAHAM"&&lpa&&vpa&&Number(lpa.valor)>0&&Number(vpa.valor)>0){
+      base={period:lpa.periodo_fim,lpa:Number(lpa.valor),vpa:Number(vpa.valor)};formula="√(22,5 × LPA × VPA)";calculate=()=>Math.sqrt(22.5*base.lpa*base.vpa);
+    }else if(r.metodo==="BAZIN"&&dpa&&Number(dpa.valor)>0){
+      base={period:dpa.periodo_fim,dpa:Number(dpa.valor)};formula="DPA ÷ yield desejado";body=presets("yield",[6,8,10,12])+input("yield","Yield desejado (%)","",0,100)+"<p class=\"data-warning\">DPA obtido de eventos do Yahoo; confirme os proventos antes de usar.</p>";calculate=v=>v.yield>0?base.dpa/(v.yield/100):null;
+    }else if(r.metodo==="GORDON_DDM"&&dpa&&Number(dpa.valor)>0){
+      base={period:dpa.periodo_fim,dpa:Number(dpa.valor)};formula="DPA × (1+g) ÷ (k−g)";body=presets("growth",[0,3,5,8])+input("growth","Crescimento anual esperado g (%)","",-99,99)+presets("rate",[8,10,12,15])+input("rate","Retorno mínimo que você exige k (%)","",0,100)+"<p>Você escolhe g e k. O sistema só calcula quando k é maior que g.</p><p class=\"data-warning\">DPA obtido de eventos do Yahoo; confirme os proventos antes de usar.</p>";calculate=v=>v.rate>v.growth&&v.rate>0?base.dpa*(1+v.growth/100)/((v.rate-v.growth)/100):null;
+    }else if(r.metodo==="LUCRO_PROJETADO"&&series("LPA").length>=2){
+      const lpas=series("LPA").slice(-5),positive=lpas.filter(x=>Number(x.valor)>0),baseLpa=lpas.length===5?lpas.reduce((s,x)=>s+Number(x.valor),0)/5:null;const histGrowth=positive.length>=2?((Number(positive.at(-1).valor)/Number(positive[0].valor))**(1/Math.max(1,new Date(positive.at(-1).periodo_fim).getUTCFullYear()-new Date(positive[0].periodo_fim).getUTCFullYear()))-1)*100:null;
+      if(baseLpa>0){base={periodos:lpas.length,lpa_medio_5a:baseLpa,lpa_historico:lpas.map(x=>({periodo:x.periodo_fim,lpa:Number(x.valor)}))};formula="LPA médio dos 5 exercícios × (1+g)^anos × P/L escolhido";body='<p>Base: média do LPA dos cinco exercícios, incluindo anos negativos. Crescimento histórico observado: '+(Number.isFinite(histGrowth)?fmt.format(histGrowth)+'%':'indisponível')+'.</p>'+presets("growth",[0,5,10,15,20])+input("growth","Sua projeção de crescimento anual (%)","",-99,200)+input("years","Prazo da projeção (anos)",5,1,20,1)+input("pe","P/L que você quer usar",10,0,100,0.1)+input("payout","Payout projetado (%)",payout?fmt.format(Number(payout.valor)*100):"",0,300)+"<p class=\"projected-dividend\"></p><p>Se não quiser usar o payout histórico, digite sua própria premissa.</p>";calculate=v=>{if(v.years<1||v.pe<=0||v.payout<0)return null;const projected=baseLpa*(1+v.growth/100)**v.years;return projected*v.pe;};base.provento_historico=payout?Number(payout.valor):null;}
+    }else if(r.metodo==="PETER_LYNCH_PEG"&&lpa&&Number(lpa.valor)>0){
+      base={period:lpa.periodo_fim,lpa:Number(lpa.valor),crescimento_historico:growthHistorical?Number(growthHistorical.valor)*100:null};formula="LPA × crescimento esperado (%) ÷ PEG desejado";body=presets("growth",[5,10,15,20,25])+input("growth","Crescimento anual esperado (%)","",0,200)+input("peg","PEG desejado",1,0.1,10,0.1)+"<p>O crescimento é uma premissa editável; o histórico aparece como referência, não como previsão.</p>";calculate=v=>v.growth>0&&v.peg>0?base.lpa*v.growth/v.peg:null;
+    }else if(r.metodo==="MULTIPLOS_PARES"&&lpa&&vpa&&Number(lpa.valor)>0&&Number(vpa.valor)>0){
+      base={period:lpa.periodo_fim,lpa:Number(lpa.valor),vpa:Number(vpa.valor)};formula="média de (LPA × P/L comparável) e (VPA × P/VP comparável)";body+="<p>Informe os múltiplos de empresas do mesmo setor. Comparação automática de pares ainda depende de completar o catálogo setorial.</p>"+input("pe","P/L de referência do setor","",0,100,0.1)+input("pb","P/VP de referência do setor","",0,50,0.1);calculate=v=>v.pe>0&&v.pb>0?(base.lpa*v.pe+base.vpa*v.pb)/2:null;
+    }
+    if(!calculate){card.insertAdjacentHTML("beforeend","<p>Faltam dados históricos compatíveis para calcular este método.</p>");continue;}
+    const box=document.createElement("div");box.innerHTML='<p>Base: '+esc(base.period||base.periodos+' exercícios')+' • '+esc(formula)+'</p>'+body+presets("margin",[0,10,20,30])+input("margin","Margem de segurança (%)",0,0,99)+ '<p class="ceiling"></p><button class="secondary" type="button">Salvar premissas e preço</button><p class="message" role="status"></p>';card.append(box);
+    const params=()=>Object.fromEntries([...box.querySelectorAll("input")].map(el=>[el.dataset.param,el.value.trim()===""?NaN:Number(el.value)]));
     const calc=()=>{const v=params();if(Object.values(v).some(x=>!Number.isFinite(x))||v.margin<0||v.margin>99)return null;const fair=calculate(v);return Number.isFinite(fair)&&fair>0?{fair,ceiling:fair*(1-v.margin/100),v}:null;};
-    const update=()=>{const c=calc();box.querySelector(".ceiling").textContent=c?"Valor calculado: "+money.format(c.fair)+" • Preço-teto: "+money.format(c.ceiling):"Informe premissas válidas.";box.querySelector("button").disabled=!c;};box.querySelectorAll("input").forEach(input=>input.oninput=update);update();
-    const key=r.metodo.toLowerCase();
-    if(key!=="graham"){box.querySelector("button").hidden=true;box.querySelector(".message").textContent="Cálculo disponível; salvamento depende de atualização do schema Supabase.";continue;}
-    box.querySelector("button").onclick=async()=>{const c=calc();if(!c)return;try{await actions.saveValuation(p,key,c.ceiling,{formula,...base,...c.v});box.querySelector(".message").textContent="Preço-teto salvo.";}catch{box.querySelector(".message").textContent="Não foi possível salvar.";}};
-    try{const saved=await actions.personalValuation(p,key);if(ticket!==revision)return;if(saved?.ceiling_price!=null)box.querySelector(".message").textContent="Preço-teto salvo anteriormente: "+money.format(saved.ceiling_price);}catch{}
-
+    const update=()=>{const c=calc();box.querySelector(".ceiling").textContent=c?"Valor de referência: "+money.format(c.fair)+" • Preço com margem: "+money.format(c.ceiling):"Preencha premissas válidas para ver o resultado.";box.querySelector("button[type=button]:not([data-preset])").disabled=!c;const dividend=box.querySelector(".projected-dividend");if(dividend){const v=params(), projected=base.lpa_medio_5a*(1+v.growth/100)**v.years;dividend.textContent=Number.isFinite(projected)&&Number.isFinite(v.payout)?"Provento anual projetado por ação: "+money.format(projected*v.payout/100):"";}};
+    box.querySelectorAll("input").forEach(el=>el.oninput=update);box.querySelectorAll("[data-preset]").forEach(button=>button.onclick=()=>{const field=box.querySelector('[data-param="'+button.dataset.preset+'"]');if(field){field.value=button.dataset.value;update();}});update();
+    box.querySelector("button[type=button]:not([data-preset])").onclick=async()=>{const c=calc();if(!c)return;try{await actions.saveValuation(p,key,c.ceiling,{formula,...base,...c.v});box.querySelector(".message").textContent="Premissas e valor salvos.";}catch{box.querySelector(".message").textContent="Não foi possível salvar. Verifique se a migração de valuation foi aplicada.";}};
+    try{const saved=await actions.personalValuation(p,key);if(ticket!==revision)return;if(saved?.ceiling_price!=null)box.querySelector(".message").textContent="Valor salvo anteriormente: "+money.format(saved.ceiling_price)+" • premissas: "+JSON.stringify(saved.assumptions||{});}catch{}
   }
 }
 async function market(){const ticket=revision;$("#market-overview").textContent="Consultando…";try{const r=await actions.api("/api/v1/market/overview");if(ticket!==revision)return;const data=r.data;const flatten=(v,p="",depth=0)=>v!==null&&typeof v==="object"&&depth<5?Object.entries(v).flatMap(([k,x])=>flatten(x,p?p+" / "+k:k,depth+1)):[[p,printable(v)]];$("#market-overview").innerHTML=table(["Indicador","Valor"],data?flatten(data):[]);}catch(e){if(ticket===revision)$("#market-overview").textContent=e.message;}}

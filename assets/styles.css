@@ -48,6 +48,7 @@ body{background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-sy
 .welcome::after{content:"";position:absolute;bottom:-1px;left:0;height:2px;width:72px;background:var(--gold)}
 .stats-grid .stat:first-child{border-top:2px solid var(--gold)}
 input,select,.chart,.valuation,.method-price,.catalog-row{background:var(--inset);color:var(--ink);border-color:var(--line)}
+.preset-row{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px}.preset-row button{min-height:34px;padding:6px 9px}.data-warning{color:#9a5b00;background:#fff5d9;border:1px solid #e3c477;border-radius:7px;padding:8px;font-size:.82rem}
 .primary,.market-classes button[aria-pressed=true]{background:var(--gold);color:var(--accent-ink)}
 .secondary{color:var(--ink);border-color:var(--line)}
 .secondary:hover,.catalog-row:hover,.theme-toggle:hover,.sheet-links a:hover,.sheet-links button:hover{background:var(--nav-selected)}
