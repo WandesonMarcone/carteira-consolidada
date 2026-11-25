@@ -11,11 +11,13 @@ class Page(HTMLParser):
         self.ids = []
         self.pages = set()
         self.screens = set()
+        self.desktop_tooltips = []
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if "id" in attrs: self.ids.append(attrs["id"])
         if "data-page" in attrs: self.pages.add(attrs["data-page"])
         if "data-screen" in attrs: self.screens.add(attrs["data-screen"])
+        if "data-tooltip" in attrs: self.desktop_tooltips.append(attrs["data-tooltip"])
 
 class WorkspaceTest(unittest.TestCase):
     def setUp(self):
@@ -46,6 +48,13 @@ class WorkspaceTest(unittest.TestCase):
         self.assertIn('id="method-class" type="hidden" value="stock"', html)
         self.assertIn('id="asset-method-section"', html)
         self.assertIn("dash-wealth", self.page.ids)
+
+    def test_desktop_navigation_explains_hover_actions(self):
+        self.assertEqual(len(self.page.desktop_tooltips), 5)
+        self.assertTrue(all(text.strip() for text in self.page.desktop_tooltips))
+        css = (ROOT / "assets/approved-layout.css").read_text()
+        self.assertIn(".desktop-nav a[data-tooltip]:hover::after", css)
+        self.assertIn(".desktop-nav button[data-tooltip]:focus-visible::after", css)
 
     def test_lazy_asset_sections(self):
         for name in ["asset-return-panel","asset-wealth-panel","asset-income-panel","asset-events-panel","catalog-retry"]:
