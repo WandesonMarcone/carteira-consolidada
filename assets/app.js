@@ -228,7 +228,19 @@ async function openPerformance(showDialog=true) {
   if (showDialog===true && !$("#performance-dialog").open) $("#performance-dialog").showModal(); $("#portfolio-twr").textContent = "N/D"; $("#portfolio-xirr").textContent = "N/D"; message("#performance-status", "Calculando apenas com as suas transações e preços da API…"); $("#portfolio-chart").innerHTML = "";
   if (!transactions.length) { message("#performance-status", "Registre transações reais para calcular TWR e XIRR. Nenhum valor foi inventado.", true); return; }
   const days = Number($("#period").value || 120); const series = {}, events = {};
-  await Promise.all(positions.filter(p => apiTypes.has(p.asset_type)).map(async p => { const key=assetKey(p), type=encodeURIComponent(p.asset_type), ticker=encodeURIComponent(p.ticker); try { const [h,e] = await Promise.all([api(`/api/v1/assets/${ticker}/history?asset_type=${type}&days=${days}`), api(`/api/v1/assets/${ticker}/corporate-events?asset_type=${type}&days=${days}`)]); series[key] = normalizedList(h); events[key] = normalizedList(e); } catch (_) { series[key] = []; events[key] = []; } }));
+  const assets=positions.filter(p=>apiTypes.has(p.asset_type));
+  for(let offset=0;offset<assets.length;offset+=4){
+    await Promise.all(assets.slice(offset,offset+4).map(async p=>{
+      const key=assetKey(p),type=encodeURIComponent(p.asset_type),ticker=encodeURIComponent(p.ticker);
+      try{
+        const [h,e]=await Promise.all([
+          api(`/api/v1/assets/${ticker}/history?asset_type=${type}&days=${days}`),
+          api(`/api/v1/assets/${ticker}/corporate-events?asset_type=${type}&days=${days}`)
+        ]);
+        series[key]=normalizedList(h);events[key]=normalizedList(e);
+      }catch(_){series[key]=[];events[key]=[];}
+    }));
+  }
   if (positions.some(p=>!series[assetKey(p)]?.length)) {message("#performance-status","Histórico incompleto para uma ou mais posições; cálculo bloqueado.",true);return;}
   const points = portfolioHistory(series, events); const flows = transactions.map(t => ({ date:t.traded_at, amount:t.operation === "buy" || t.operation === "fee" ? -transactionTotal(t) : t.operation === "sell" || t.operation === "dividend" ? transactionTotal(t) : 0 })).filter(f => f.amount); const last = points.at(-1); if (last) flows.push({ date:last.date, amount:last.value }); const twrValue = twr(points), xirrValue = xirr(flows);
   $("#portfolio-twr").textContent = twrValue == null ? "Indisponível" : `${twrValue.toFixed(2)}%`; $("#portfolio-xirr").textContent = xirrValue == null ? "Indisponível" : `${(xirrValue * 100).toFixed(2)}% a.a.`; $("#portfolio-chart").innerHTML = svgChart(points, "value", "Patrimônio pessoal"); message("#performance-status", points.length ? `Série pessoal: ${points.length} datas. TWR usa fluxo externo no fim do dia; XIRR usa compras, vendas, proventos, custos e valor final.` : "Não há preços históricos suficientes para montar a série pessoal.", !points.length);

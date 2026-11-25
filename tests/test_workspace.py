@@ -50,3 +50,8 @@ class WorkspaceTest(unittest.TestCase):
     def test_lazy_asset_sections(self):
         for name in ["asset-return-panel","asset-wealth-panel","asset-income-panel","asset-events-panel","catalog-retry"]:
             self.assertIn(name, self.page.ids)
+
+    def test_performance_requests_are_batched(self):
+        code = (ROOT / "assets/app.js").read_text()
+        self.assertIn("for(let offset=0;offset<assets.length;offset+=4)", code)
+        self.assertNotIn("Promise.all(positions.filter(p => apiTypes.has(p.asset_type)).map", code)
