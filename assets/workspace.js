@@ -79,9 +79,10 @@ async function market(){const ticket=revision;$("#market-overview").textContent=
 
 // Catálogo paginado: somente dados fornecidos pelo Robô, sem lista inventada.
 async function loadCatalog(){
+  if(!actions?.getUser())return;
   const token=++catalogRevision;catalogLoaded=true;
   const search=$("#catalog-search").value.trim(),sector=$("#catalog-sector").value;
-  $("#catalog-list").replaceChildren();$("#catalog-status").textContent="Consultando catálogo…";
+  $("#catalog-list").replaceChildren();$("#catalog-manual").hidden=true;$("#catalog-status").textContent="Consultando catálogo…";
   $("#catalog-prev").disabled=true;$("#catalog-next").disabled=true;
   try{
     const params=new URLSearchParams({asset_type:catalogClass,page:String(catalogPage),page_size:"24",q:search,sector});
@@ -96,6 +97,7 @@ async function loadCatalog(){
     $("#catalog-prev").disabled=catalogPage<=1;$("#catalog-next").disabled=response.has_more!==true;
   }catch(e){
     if(token!==catalogRevision||!actions.getUser())return;
+    $("#catalog-manual").hidden=false;
     catalogRows=actions.getPositions().filter(p=>p.asset_type===catalogClass&&(!search||p.ticker.toLowerCase().includes(search.toLowerCase())));
     $("#catalog-status").textContent="Catálogo geral indisponível. Exibindo somente ativos já cadastrados na sua carteira. O Robô precisa disponibilizar a listagem.";
   }
@@ -111,6 +113,7 @@ async function loadCatalog(){
   }
 }
 function setupCatalog(){
+  $("#catalog-manual").onclick=()=>actions.openPosition();
   document.querySelectorAll("[data-market-class]").forEach(b=>b.onclick=()=>{catalogClass=b.dataset.marketClass;catalogPage=1;$("#catalog-sector").value="";document.querySelectorAll("[data-market-class]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));loadCatalog();});
   let timer;$("#catalog-search").oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>{catalogPage=1;loadCatalog();},300);};
   $("#catalog-sector").onchange=()=>{catalogPage=1;loadCatalog();};
