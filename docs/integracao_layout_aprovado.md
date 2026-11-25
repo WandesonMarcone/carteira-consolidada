@@ -13,7 +13,8 @@ GET /api/v1/assets/{ticker}, /history, /income, /corporate-events, /performance,
 5. Renda fixa requer catálogo e regras próprias; não tratar títulos como ações.
 
 ## Pendências locais
-- Persistência de Bazin/Gordon/preço-teto exige expansão segura da constraint method de personal_valuations. Não aplicar migration sem verificar schema real; Graham usa a opção existente.
-- DCF, Lynch, lucro residual, lucro projetado e múltiplos: calculadoras e validação de premissas ainda precisam ser implementadas. O frontend mostra cobertura quando retornada.
+- Escopo atual de metodologias para ações: Graham, Bazin, Gordon, Peter Lynch, projeção de lucros históricos e múltiplos do setor. FCFF e FCFE não são apresentados. Crescimento, retorno exigido, yield, prazo, payout projetado, P/L, PEG e múltiplos setoriais são editáveis pelo usuário; os botões de sugestão apenas preenchem valores para simulação.
+- A migration `20261125204427_expand_personal_valuation_methods.sql` amplia a constraint de `personal_valuations` para salvar as premissas dos métodos. Ela já foi aplicada no Supabase e a constraint foi consultada para confirmar os métodos permitidos. Proventos coletados do Yahoo são complementares e devem ser reconciliados com B3/CVM antes de serem tratados como oficiais.
+- Múltiplos setoriais ainda são informados manualmente; comparação automática exige catálogo de pares do mesmo setor e normalização dos indicadores.
 - Validar cálculo de carteira, transações e proventos ponta a ponta com conta de teste e histórico completo. Não afirmar rentabilidade certificada.
 - Deploy Pages separado em build/deploy para evitar corrida de disponibilidade do artefato. Validação no navegador autenticado ainda necessária.
