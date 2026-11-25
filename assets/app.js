@@ -10,6 +10,7 @@ const apiTypes = new Set(["stock", "fii", "etf", "bdr", "crypto", "currency"]);
 let positions = [], transactions = [], quotes = {}, currentUser = null;
 const $ = s => document.querySelector(s);
 const dateISO = d => new Date(d).toISOString().slice(0, 10);
+const displayDate = value => { const raw=String(value || "").slice(0,10); if(!raw)return "N/D"; const parsed=new Date(raw+"T12:00:00Z"); return Number.isNaN(parsed.valueOf())?raw:dates.format(parsed); };
 const number = v => Number(v || 0);
 const escape = s => String(s ?? "").replace(/[&<>'"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[c]));
 const message = (selector, text, error = false) => { const el = $(selector); el.textContent = text; el.classList.toggle("error", error); };
@@ -186,7 +187,8 @@ async function openAsset(p){
   $("#asset-indicators").textContent="Carregando indicadores…";
   $("#asset-return").textContent="—";$("#asset-return-detail").textContent="";
   for(const id of ["asset-price-chart","asset-wealth-chart","asset-income","asset-events"])$("#"+id).textContent="Carregando…";
-  for(const id of ["asset-return-panel","asset-wealth-panel","asset-income-panel","asset-events-panel"]){const panel=$("#"+id);panel.ontoggle=null;panel.open=false;}
+  const initiallyOpen = new Set(["asset-income-panel","asset-events-panel"]);
+  for(const id of ["asset-return-panel","asset-wealth-panel","asset-income-panel","asset-events-panel"]){const panel=$("#"+id);panel.ontoggle=null;panel.open=initiallyOpen.has(id);}
   $("#asset-methods").replaceChildren();void renderMethods(p,{});
   message("#asset-status","Consultando cotação e indicadores…");
   if(!apiTypes.has(p.asset_type)){message("#asset-status","Classe sem integração de mercado.",true);$("#asset-indicators").textContent="Indisponível";return;}
@@ -206,6 +208,8 @@ async function openAsset(p){
   bind("asset-wealth-panel","asset-wealth-chart",async()=>{if(!transactions.some(t=>t.ticker===p.ticker&&t.asset_type===p.asset_type)){if(valid())$("#asset-wealth-chart").textContent="Registre compras e vendas para formar o patrimônio pessoal.";return;}const [rows,ev]=await Promise.all([history(),events()]);if(!valid())return;const points=rows.map(x=>({date:pointDate(x),wealth:eventAdjustedQuantity(p,pointDate(x),ev)*pointPrice(x)})).filter(x=>x.date);$("#asset-wealth-chart").innerHTML=svgChart(points,"wealth","Patrimônio do ativo");});
   bind("asset-income-panel","asset-income",async()=>{const personal=transactions.some(t=>t.ticker===p.ticker&&t.asset_type===p.asset_type);const [rows,ev]=await Promise.all([get("/income").then(normalizedList),personal?events():Promise.resolve([])]);if(valid())renderIncome(p,rows,ev);});
   bind("asset-events-panel","asset-events",async()=>{const rows=await events();if(valid())renderEvents(rows);});
+  $("#asset-income-panel").dispatchEvent(new Event("toggle"));
+  $("#asset-events-panel").dispatchEvent(new Event("toggle"));
   // Dados de identificação e gráfico independentes; nenhum espera o outro.
   const detail=api(path+"?asset_type="+type).then(r=>{if(!valid())return;const asset=r.data||r;assetIdentity(p,asset);assetIndicators(p,asset);message("#asset-status",asset.updated_at?"Referência da cotação: "+asset.updated_at:"Dados disponíveis do Robô.");}).catch(e=>{if(valid()){message("#asset-status",e.message,true);$("#asset-indicators").textContent="Indicadores temporariamente indisponíveis."; }});
   const chart=history().then(rows=>{if(!valid())return;const points=rows.map(x=>({date:pointDate(x),price:pointPrice(x)})).filter(x=>x.date&&x.price>0);$("#asset-price-chart").innerHTML=svgChart(points,"price","Evolução do preço");}).catch(e=>{if(valid())$("#asset-price-chart").textContent=e.message;tasks.delete("/history");});
@@ -213,10 +217,10 @@ async function openAsset(p){
 }
 function unavailable(title, reason) { return `<article class="valuation unavailable"><span>${escape(title)}</span><strong>Indisponível</strong><span>${escape(reason)}</span></article>`; }
 function renderIncome(p, incomes, events) {
-  const rows = incomes.map(i => { const ex = incomeDate(i); const amount = number(i.amount_per_unit); const qty = ex ? eventAdjustedQuantity(p, ex, events) : 0; return { ex, amount, qty, total:amount * qty, source:statusText(i) }; });
-  $("#asset-income").innerHTML = rows.length ? `<table><thead><tr><th>Data-ex</th><th>Valor/un.</th><th>Qtde elegível</th><th>Total</th><th>Origem</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escape(r.ex || "N/D")}</td><td>${money.format(r.amount)}</td><td>${r.ex ? r.qty.toLocaleString("pt-BR") : "N/D"}</td><td>${r.ex ? money.format(r.total) : "N/D"}</td><td>${escape(r.source)}</td></tr>`).join("")}</tbody></table>` : '<p class="empty">Nenhum provento retornado para o período. Ausência não é tratada como zero.</p>';
+  const rows = incomes.map(i => { const ex = incomeDate(i); const amount = number(i.amount_per_unit); const qty = ex ? eventAdjustedQuantity(p, ex, events) : 0; return { ex, payment: i.payment_date || null, amount, qty, total:amount * qty, source:statusText(i) }; });
+  $("#asset-income").innerHTML = rows.length ? `<table><thead><tr><th>Data-ex</th><th>Pagamento</th><th>Valor/un.</th><th>Qtde elegível</th><th>Total</th><th>Origem</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escape(displayDate(r.ex))}</td><td>${escape(displayDate(r.payment))}</td><td>${money.format(r.amount)}</td><td>${r.ex ? r.qty.toLocaleString("pt-BR") : "N/D"}</td><td>${r.ex ? money.format(r.total) : "N/D"}</td><td>${escape(r.source)}</td></tr>`).join("")}</tbody></table>` : '<p class="empty">Nenhum provento retornado para o período. Ausência não é tratada como zero.</p>';
 }
-function renderEvents(events) { $("#asset-events").innerHTML = events.length ? `<ul class="records">${events.map(e => `<li><b>${escape(e.event_type || e.type || "Evento")}</b> • ${escape(eventDate(e) || "data não informada")} • fator ${validFactor(e)} • ${escape(statusText(e))}</li>`).join("")}</ul>` : '<p class="empty">Nenhum evento corporativo confirmado no período.</p>'; }
+function renderEvents(events) { $("#asset-events").innerHTML = events.length ? `<ul class="records">${events.map(e => `<li><b>${escape(e.event_type || e.type || "Evento")}</b> • ${escape(displayDate(eventDate(e)))} • fator ${validFactor(e)} • ${escape(statusText(e))}</li>`).join("")}</ul>` : '<p class="empty">Nenhum evento corporativo confirmado no período.</p>'; }
 async function renderMethods(p, asset) {
   const container=$("#asset-methods"); container.replaceChildren();
   if(p.asset_type!=="stock")return;
