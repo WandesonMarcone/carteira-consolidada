@@ -20,7 +20,7 @@ function route(){
 function table(headers, rows){return rows.length?"<table><thead><tr>"+headers.map(x=>"<th>"+esc(x)+"</th>").join("")+"</tr></thead><tbody>"+rows.map(r=>"<tr>"+r.map(x=>"<td>"+esc(x)+"</td>").join("")+"</tr>").join("")+"</tbody></table>":'<p class="empty">Nenhum registro disponível.</p>';}
 function bars(items, total){return items.length?items.map(([label,value])=>'<div class="bar-item"><div><span>'+esc(label)+'</span><strong>'+money.format(value)+(total>0?' • '+fmt.format(100*value/total)+'%':'')+'</strong></div><div class="bar-track"><span style="width:'+Math.max(0,Math.min(100,total>0?100*value/total:0))+'%"></span></div></div>').join(""):'<p class="empty">Nenhum registro disponível.</p>';}
 export function renderWorkspace({positions,transactions,quotes,types,positionValue,transactionTotal,operationName}){
-  if(location.hash==="#mercado"&&!catalogLoaded&&actions?.getUser())loadCatalog();
+  if(location.hash==="#mercado"&&!catalogLoaded&&actions?.getUser()&&$("#catalog-retry").hidden)loadCatalog();
   const groups={}; for(const p of positions){const label=types[p.asset_type]||p.asset_type;groups[label]=(groups[label]||0)+positionValue(p);}
   const list=Object.entries(groups).sort((a,b)=>b[1]-a[1]), total=list.reduce((s,x)=>s+x[1],0);
   const note='<p class="data-note">Estimativa: '+Object.keys(quotes).length+' de '+positions.length+' posições com cotação. Sem cotação, utiliza preço médio.</p>';
@@ -92,7 +92,7 @@ async function loadCatalog(){
   if(!actions?.getUser())return;
   const token=++catalogRevision;catalogLoaded=true;
   const search=$("#catalog-search").value.trim(),sector=$("#catalog-sector").value;
-  $("#catalog-list").replaceChildren();$("#catalog-manual").hidden=true;$("#catalog-status").textContent="Consultando catálogo…";
+  $("#catalog-manual").hidden=true;$("#catalog-retry").hidden=true;$("#catalog-status").textContent="Consultando catálogo…";$("#catalog-list").setAttribute("aria-busy","true");
   $("#catalog-prev").disabled=true;$("#catalog-next").disabled=true;
   try{
     const params=new URLSearchParams({asset_type:catalogClass,page:String(catalogPage),page_size:"24",q:search,sector});
@@ -109,8 +109,9 @@ async function loadCatalog(){
     if(token!==catalogRevision||!actions.getUser())return;
     $("#catalog-manual").hidden=false;
     catalogRows=actions.getPositions().filter(p=>p.asset_type===catalogClass&&(!search||p.ticker.toLowerCase().includes(search.toLowerCase())));
-    $("#catalog-status").textContent="Catálogo geral indisponível. Exibindo somente ativos já cadastrados na sua carteira. O Robô precisa disponibilizar a listagem.";
+    catalogLoaded=false;$("#catalog-retry").hidden=false;$("#catalog-status").textContent="Catálogo temporariamente indisponível. "+e.message+" Exibindo posições cadastradas.";
   }
+  $("#catalog-list").replaceChildren();$("#catalog-list").removeAttribute("aria-busy");
   for(const p of catalogRows){
     const row=document.createElement("button");row.className="catalog-row";row.type="button";
     const mark=document.createElement("span");mark.className="asset-logo";mark.textContent=p.ticker.slice(0,2);
@@ -123,6 +124,7 @@ async function loadCatalog(){
   }
 }
 function setupCatalog(){
+  $("#catalog-retry").onclick=()=>loadCatalog();
   $("#pick-stock").onclick=()=>{catalogClass="stock";catalogPage=1;$("#catalog-search").value="";$("#catalog-sector").value="";document.querySelectorAll("[data-market-class]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.marketClass==="stock")));catalogLoaded=false;location.hash="mercado";};
   $("#catalog-manual").onclick=()=>actions.openPosition();
   document.querySelectorAll("[data-market-class]").forEach(b=>b.onclick=()=>{catalogClass=b.dataset.marketClass;catalogPage=1;$("#catalog-sector").value="";document.querySelectorAll("[data-market-class]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));loadCatalog();});

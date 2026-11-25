@@ -46,3 +46,7 @@ class WorkspaceTest(unittest.TestCase):
         self.assertIn('id="method-class" type="hidden" value="stock"', html)
         self.assertIn('id="asset-method-section"', html)
         self.assertIn("dash-wealth", self.page.ids)
+
+    def test_lazy_asset_sections(self):
+        for name in ["asset-return-panel","asset-wealth-panel","asset-income-panel","asset-events-panel","catalog-retry"]:
+            self.assertIn(name, self.page.ids)
