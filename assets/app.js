@@ -143,6 +143,12 @@ async function openAsset(p) {
   if (window.activeAsset !== p || !currentUser || !$("#asset-dialog").open) return;
   const identity=$("#asset-identity"); const image=document.createElement("img"); const logo=asset.logo_url||p.logo_url; if (typeof logo==="string"&&logo.startsWith("https://")) { image.src=logo; image.alt="Logo de "+p.ticker; image.referrerPolicy="no-referrer"; image.onerror=()=>image.remove(); identity.append(image); } const info=document.createElement("div"); info.textContent=[asset.name||p.name||p.ticker, asset.classification?.sector||p.sector, asset.price!=null?money.format(asset.price):null].filter(Boolean).join(" • "); identity.append(info);
   $("#asset-indicators").innerHTML=Object.entries(asset.indicators||{}).map(([k,v])=>`<article class="valuation"><span>${escape(k.toUpperCase())}</span><strong>${v==null?"N/D":escape(v)}</strong></article>`).join("");
+  if (p.asset_type === "stock") {
+    const capital = asset.share_capital || {};
+    const integer = new Intl.NumberFormat("pt-BR", {maximumFractionDigits:0});
+    const shares = v => v != null && Number.isSafeInteger(Number(v)) && Number(v)>=0 ? integer.format(Number(v)) : "Não confirmado";
+    $("#asset-indicators").insertAdjacentHTML("beforeend", `<article class="valuation"><span>Ações informadas do ticker</span><strong>${shares(capital.ticker_shares)}</strong></article><article class="valuation"><span>Total de ações da empresa</span><strong>${shares(capital.company_shares)}</strong><span>${capital.reference_date ? "Ref. "+escape(capital.reference_date)+" • "+escape(capital.source||"") : "Pendente de conciliação oficial"}</span><span>${capital.status === 'ESTIMATIVA_YAHOO' ? 'Yahoo: total implícito estimado, não capital emitido confirmado.' : 'Não somar entre classes do mesmo emissor.'}</span></article>`);
+  }
   const pricePoints = history.map(x => ({ date:pointDate(x), price:pointPrice(x) })).filter(x => x.date && x.price > 0); $("#asset-price-chart").innerHTML = svgChart(pricePoints, "price", "Evolução do preço");
   const wealth = pricePoints.map(point => ({ date:point.date, wealth:eventAdjustedQuantity(p, point.date, events) * point.price })); $("#asset-wealth-chart").innerHTML = transactions.some(t => t.ticker === p.ticker && t.asset_type === p.asset_type) ? svgChart(wealth, "wealth", "Patrimônio do ativo") : '<p class="empty">Registre compras e vendas para formar patrimônio pessoal sem supor quantidade histórica.</p>';
   renderIncome(p, incomes, events); renderEvents(events); await renderMethods(p, asset, history);
