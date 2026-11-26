@@ -26,7 +26,8 @@ class WorkspaceTest(unittest.TestCase):
     def test_unique_ids(self):
         self.assertEqual(len(self.page.ids), len(set(self.page.ids)))
     def test_navigation_matches_screens(self):
-        self.assertEqual(self.page.pages, self.page.screens)
+        self.assertTrue(self.page.pages.issubset(self.page.screens))
+        self.assertEqual(self.page.screens - self.page.pages, {"ativo"})
         self.assertEqual(len(self.page.pages), 9)
     def test_static_dom_references(self):
         code = "\n".join((ROOT / p).read_text() for p in ["assets/app.js", "assets/workspace.js"])
@@ -57,8 +58,11 @@ class WorkspaceTest(unittest.TestCase):
         self.assertIn(".desktop-nav button[data-tooltip]:focus-visible::after", css)
 
     def test_lazy_asset_sections(self):
-        for name in ["asset-return-panel","asset-wealth-panel","asset-income-panel","asset-events-panel","catalog-retry"]:
+        for name in ["asset-price-chart","asset-wealth-chart","asset-income-panel","asset-events-panel","catalog-retry"]:
             self.assertIn(name, self.page.ids)
+        html = (ROOT / "index.html").read_text()
+        self.assertNotIn('id="asset-dialog"', html)
+        self.assertNotIn('id="performance-dialog"', html)
 
     def test_performance_requests_are_batched(self):
         code = (ROOT / "assets/app.js").read_text()

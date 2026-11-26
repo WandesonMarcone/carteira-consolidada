@@ -3,21 +3,23 @@ const $ = s => document.querySelector(s);
 const esc = v => String(v ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const money = new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"});
 const fmt = new Intl.NumberFormat("pt-BR",{maximumFractionDigits:4});
-const titles = {dashboard:"Visão geral",carteira:"Minha carteira",patrimonio:"Patrimônio",rentabilidade:"Rentabilidade",proventos:"Proventos",transacoes:"Transações",composicao:"Composição",metodologias:"Metodologias para ações",mercado:"Mercado"};
+const titles = {dashboard:"Visão geral",carteira:"Minha carteira",patrimonio:"Patrimônio",rentabilidade:"Rentabilidade",proventos:"Proventos",transacoes:"Transações",composicao:"Composição",metodologias:"Metodologias para ações",mercado:"Mercado",ativo:"Análise do ativo"};
 // Escopo acordado para valuation de ações; evita expor metodologias não solicitadas.
 const methods = {GRAHAM:"Graham",BAZIN:"Bazin",GORDON_DDM:"Gordon",LUCRO_PROJETADO:"Projeção de lucros",PETER_LYNCH_PEG:"Peter Lynch",MULTIPLOS_PARES:"Múltiplos do setor"};
 const visibleMethods = new Set(Object.keys(methods));
-let actions, revision=0, catalogRevision=0, catalogClass="stock", catalogPage=1, catalogRows=[], catalogLoaded=false;
+let actions, revision=0, catalogRevision=0, catalogClass="stock", catalogPage=1, catalogRows=[], catalogLoaded=false, currentPage="";
 function route(){
-  const key=location.hash.slice(1); const page=Object.hasOwn(titles,key)?key:"dashboard";
+  const hash=location.hash.slice(1),assetRoute=hash.startsWith("ativo/"),page=assetRoute?"ativo":Object.hasOwn(titles,hash)?hash:"dashboard",entered=page!==currentPage;currentPage=page;
   document.querySelectorAll("[data-screen]").forEach(el=>el.hidden=el.dataset.screen!==page);
   document.querySelectorAll("[data-page]").forEach(el=>{if(el.dataset.page===page)el.setAttribute("aria-current","page");else el.removeAttribute("aria-current");});
-  $("#welcome-title").textContent=titles[page];
-  const group=["carteira","patrimonio","rentabilidade","proventos","transacoes","composicao"].includes(page)?"carteira":page;
+  const active=actions?.getActiveAsset?.();$("#welcome-title").textContent=page==="ativo"&&active?active.ticker+" • "+(active.name||active.asset_type):titles[page];
+  const group=["carteira","patrimonio","rentabilidade","proventos","transacoes","composicao","ativo"].includes(page)?"carteira":page;
   document.querySelectorAll("[data-nav]").forEach(el=>el.classList.toggle("selected",el.dataset.nav===group));
   if(page==="mercado"&&actions?.getUser()&&!catalogLoaded)loadCatalog();
-  $("#new-position").hidden=!(page==="dashboard"||page==="carteira");
-  $("#portfolio-performance").hidden=!(page==="dashboard"||page==="rentabilidade"||page==="patrimonio");
+  $("#new-position").hidden=!(page==="dashboard"||page==="carteira");$("#portfolio-performance").hidden=page==="rentabilidade"||page==="ativo";
+  if(entered&&actions?.getUser()&&page==="rentabilidade")actions.openPerformance();
+  if(entered&&actions?.getUser()&&page==="patrimonio")actions.openPerformance();
+  if(page==="ativo"&&actions?.getUser()&&!actions.getActiveAsset?.())actions.restoreActiveAsset?.();
 }
 function table(headers, rows){return rows.length?"<table><thead><tr>"+headers.map(x=>"<th>"+esc(x)+"</th>").join("")+"</tr></thead><tbody>"+rows.map(r=>"<tr>"+r.map(x=>"<td>"+esc(x)+"</td>").join("")+"</tr>").join("")+"</tbody></table>":'<p class="empty">Nenhum registro disponível.</p>';}
 function bars(items, total){return items.length?items.map(([label,value])=>'<div class="bar-item"><div><span>'+esc(label)+'</span><strong>'+money.format(value)+(total>0?' • '+fmt.format(100*value/total)+'%':'')+'</strong></div><div class="bar-track"><span style="width:'+Math.max(0,Math.min(100,total>0?100*value/total:0))+'%"></span></div></div>').join(""):'<p class="empty">Nenhum registro disponível.</p>';}
@@ -144,5 +146,10 @@ function setupCatalog(){
   $("#sheet-logout").onclick=()=>{$("#nav-sheet").close();actions.logout();};
 }
 
-export function setupWorkspace(opts){actions=opts;setupCatalog();window.addEventListener("hashchange",route);route();$("#position-search").oninput=opts.render;$("#position-filter").onchange=opts.render;$("#method-search").onsubmit=searchMethods;$("#market-refresh").onclick=market;document.querySelectorAll(".history-trigger").forEach(b=>b.onclick=async()=>{await opts.openPerformance(false);$("#wealth-inline").innerHTML=$("#portfolio-chart").innerHTML;$("#wealth-status").textContent=$("#performance-status").textContent;$("#return-status").textContent=$("#performance-status").textContent;$("#twr-inline").textContent=$("#portfolio-twr").textContent;$("#xirr-inline").textContent=$("#portfolio-xirr").textContent;$("#dash-wealth").innerHTML=$("#portfolio-chart").innerHTML;$("#dash-return").textContent=$("#portfolio-twr").textContent;$("#dash-history-status").textContent=$("#performance-status").textContent;});}
+export function setupWorkspace(opts){
+  actions=opts;setupCatalog();window.addEventListener("hashchange",route);route();
+  $("#position-search").oninput=opts.render;$("#position-filter").onchange=opts.render;$("#method-search").onsubmit=searchMethods;$("#market-refresh").onclick=market;
+  document.querySelectorAll("[data-period-days]").forEach(button=>button.onclick=()=>opts.setPeriod(Number(button.dataset.periodDays)));
+  document.querySelectorAll(".history-trigger").forEach(button=>button.onclick=async()=>{button.disabled=true;button.textContent="Consultando…";await opts.openPerformance();button.disabled=false;button.textContent="Atualizar gráfico";});
+}
 export function resetWorkspace(){revision++;catalogRevision++;catalogLoaded=false;catalogRows=[];catalogPage=1;$("#catalog-list").replaceChildren();$("#catalog-status").textContent="";$("#profile-email").textContent="";for(const id of ["dash-return","dash-wealth","dash-history-status","dash-income-total","dash-transactions","method-cards","method-quote","method-facts","method-status","market-overview","wealth-inline","wealth-status","return-status","twr-inline","xirr-inline","dash-allocation","full-allocation","dash-income","income-chart","income-table","transaction-table","positions-list","transactions-list"])$("#"+id)?.replaceChildren();document.querySelectorAll("dialog[open]").forEach(d=>d.close());location.hash="dashboard";}
