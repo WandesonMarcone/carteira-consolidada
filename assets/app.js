@@ -61,7 +61,7 @@ const api = async path => {
   const request=(async()=>{
     const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),15000);
     try{
-      const value=config.marketDataSource==="neon"?await neonRequest(path):await (async()=>{const response=await fetch(config.roboApiUrl+path,{headers:{Authorization:"Bearer "+token},signal:controller.signal});if(!response.ok)throw new Error("API do Robô indisponível ("+response.status+").");return response.json();})();
+      const value=await neonRequest(path);
       if(epoch!==marketEpoch||currentUser?.id!==owner)throw new Error("Sessão alterada.");
       marketCache.delete(key);marketCache.set(key,{value,expires:Date.now()+ttlFor(path)});
       if(marketCache.size>100)marketCache.delete(marketCache.keys().next().value);
