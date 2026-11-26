@@ -10,6 +10,7 @@ const visibleMethods = new Set(Object.keys(methods));
 let actions, revision=0, catalogRevision=0, catalogClass="stock", catalogPage=1, catalogRows=[], catalogLoaded=false, currentPage="";
 function route(){
   const hash=location.hash.slice(1),assetRoute=hash.startsWith("ativo/"),page=assetRoute?"ativo":Object.hasOwn(titles,hash)?hash:"dashboard",entered=page!==currentPage;currentPage=page;
+  if(entered&&page==="ativo")window.scrollTo(0,0);
   document.querySelectorAll("[data-screen]").forEach(el=>el.hidden=el.dataset.screen!==page);
   document.querySelectorAll("[data-page]").forEach(el=>{if(el.dataset.page===page)el.setAttribute("aria-current","page");else el.removeAttribute("aria-current");});
   const active=actions?.getActiveAsset?.();$("#welcome-title").textContent=page==="ativo"&&active?active.ticker+" • "+(active.name||active.asset_type):titles[page];

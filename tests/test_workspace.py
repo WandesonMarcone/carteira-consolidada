@@ -62,6 +62,8 @@ class WorkspaceTest(unittest.TestCase):
         self.assertLess(html.index('id="asset-screen"'), html.index('<dialog id="nav-sheet"'))
         code = (ROOT / "assets/app.js").read_text()
         self.assertIn("renderAssetPage(currentAsset)", code)
+        workspace = (ROOT / "assets/workspace.js").read_text()
+        self.assertIn('if(entered&&page==="ativo")window.scrollTo(0,0);', workspace)
 
     def test_no_global_period_selector(self):
         html = (ROOT / "index.html").read_text()
