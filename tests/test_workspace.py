@@ -72,3 +72,18 @@ class WorkspaceTest(unittest.TestCase):
         self.assertIn('dpaProjected/(v.yield/100)', code)
         self.assertIn('input("yield","Yield desejado para preço-teto por dividendos (%)"', code)
         self.assertIn('LPA projetado: ', code)
+
+    def test_transaction_composer_has_trade_fields_and_costs(self):
+        html = (ROOT / "index.html").read_text()
+        code = (ROOT / "assets/app.js").read_text()
+        self.assertIn('id="transaction-category"', html)
+        self.assertIn('id="transaction-asset-search"', html)
+        self.assertIn('data-transaction-mode="buy"', html)
+        self.assertIn('data-transaction-mode="sell"', html)
+        self.assertIn('id="transaction-brokerage"', html)
+        self.assertIn('id="transaction-fees"', html)
+        self.assertIn('id="transaction-total-preview"', html)
+        self.assertIn('id="transaction-operation" type="hidden"', html)
+        self.assertIn('assets/transaction.css', html)
+        self.assertIn('gross+costs', code)
+        self.assertIn('gross-costs', code)
