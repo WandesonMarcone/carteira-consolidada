@@ -57,6 +57,12 @@ class WorkspaceTest(unittest.TestCase):
         self.assertIn(".desktop-nav a[data-tooltip]:hover::after", css)
         self.assertIn(".desktop-nav button[data-tooltip]:focus-visible::after", css)
 
+    def test_no_global_period_selector(self):
+        html = (ROOT / "index.html").read_text()
+        code = (ROOT / "assets/app.js").read_text()
+        self.assertNotIn("data-period-days", html)
+        self.assertIn("const selectedDays = 120;", code)
+
     def test_lazy_asset_sections(self):
         for name in ["asset-price-chart","asset-wealth-chart","asset-income-panel","asset-events-panel","catalog-retry"]:
             self.assertIn(name, self.page.ids)
