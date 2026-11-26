@@ -34,10 +34,15 @@ class WorkspaceTest(unittest.TestCase):
         ids = set(re.findall(r'\$\("#([^"]+)"\)', code))
         self.assertEqual(ids - set(self.page.ids), {"logout"}) # criado após login
 
+    def test_frontend_assets_use_cache_version(self):
+        html = (ROOT / "index.html").read_text()
+        self.assertIn('./assets/app.js?v=20261126-1', html)
+        self.assertIn('./assets/professional.css?v=20261126-1', html)
+
     def test_theme_switch(self):
         self.assertIn("theme-toggle", self.page.ids)
         html = (ROOT / "index.html").read_text()
-        self.assertIn('src="./assets/theme.js"', html)
+        self.assertIn('src="./assets/theme.js?v=20261126-1"', html)
         css = (ROOT / "assets/styles.css").read_text()
         self.assertIn('[data-theme="light"]', css)
 
