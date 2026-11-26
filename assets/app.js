@@ -7,7 +7,7 @@ const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL
 const dates = new Intl.DateTimeFormat("pt-BR");
 const types = { fii: "FII", stock: "Ação", etf: "ETF", bdr: "BDR", fixed_income: "Renda fixa", crypto: "Cripto", other: "Outro" };
 const apiTypes = new Set(["stock", "fii", "etf", "bdr", "crypto", "currency"]);
-let positions = [], transactions = [], quotes = {}, currentUser = null;
+let positions = [], transactions = [], quotes = {}, currentUser = null, selectedDays = 120, quoteProgress = null, currentAsset = null, portfolioRequest = 0;
 const $ = s => document.querySelector(s);
 const dateISO = d => new Date(d).toISOString().slice(0, 10);
 const displayDate = value => { const raw=String(value || "").slice(0,10); if(!raw)return "N/D"; const parsed=new Date(raw+"T12:00:00Z"); return Number.isNaN(parsed.valueOf())?raw:dates.format(parsed); };
@@ -68,11 +68,20 @@ function eventAdjustedQuantity(p, atDate, events = []) {
   return Math.max(0, quantity);
 }
 function svgChart(points, valueField, label) {
-  const valid = points.filter(p => Number.isFinite(number(p[valueField])));
-  if (valid.length < 2) return '<p class="empty">Série insuficiente para formar este gráfico.</p>';
-  const values = valid.map(p => number(p[valueField])); const min = Math.min(...values); const max = Math.max(...values); const spread = max - min || 1;
-  const coords = valid.map((p, i) => `${10 + (i / (valid.length - 1)) * 580},${200 - ((number(p[valueField]) - min) / spread) * 165}`).join(" ");
-  return `<svg viewBox="0 0 600 220" role="img" aria-label="${escape(label)}"><line class="grid" x1="10" x2="590" y1="35" y2="35"/><line class="grid" x1="10" x2="590" y1="117" y2="117"/><line class="grid" x1="10" x2="590" y1="200" y2="200"/><polyline class="line" points="${coords}"/><text x="12" y="25">${money.format(max)}</text><text x="12" y="216">${money.format(min)}</text></svg>`;
+  const valid=points.filter(p=>Number.isFinite(Number(p[valueField]))&&pointDate(p));
+  if(!valid.length)return '<div class="chart-empty"><span>◌</span><p>Não há histórico suficiente para exibir este gráfico.</p></div>';
+  const width=760,height=310,left=82,right=22,top=22,bottom=48,plotW=width-left-right,plotH=height-top-bottom;
+  const values=valid.map(p=>Number(p[valueField])),min=Math.min(...values),max=Math.max(...values),spread=max-min||Math.max(Math.abs(max)*.02,1);
+  const x=i=>left+(valid.length===1?plotW/2:i/(valid.length-1)*plotW),y=v=>top+plotH-(v-min)/spread*plotH;
+  const line=valid.map((p,i)=>`${x(i).toFixed(2)},${y(Number(p[valueField])).toFixed(2)}`).join(" ");
+  const area=`${left},${top+plotH} ${line} ${left+plotW},${top+plotH}`;
+  const fmtValue=v=>money.format(v),chartId=`area-${valueField}-${Math.random().toString(36).slice(2,8)}`;
+  const grid=[0,.5,1].map(frac=>{const yy=top+frac*plotH,vv=max-frac*spread;return `<line class="chart-gridline" x1="${left}" x2="${left+plotW}" y1="${yy}" y2="${yy}"/><text class="chart-axis-label" x="${left-10}" y="${yy+4}" text-anchor="end">${fmtValue(vv)}</text>`;}).join("");
+  const labelPoints=[0,Math.floor((valid.length-1)/2),valid.length-1].filter((n,i,a)=>a.indexOf(n)===i);
+  const xlabels=labelPoints.map(i=>`<text class="chart-axis-label" x="${x(i)}" y="${height-12}" text-anchor="${i===0?"start":i===valid.length-1?"end":"middle"}">${escape(displayDate(pointDate(valid[i])))}</text>`).join("");
+  const markerStep=Math.max(1,Math.ceil(valid.length/28));
+  const markers=valid.map((p,i)=>i%markerStep===0||i===valid.length-1?`<circle class="chart-marker" cx="${x(i)}" cy="${y(Number(p[valueField]))}" r="3"><title>${escape(displayDate(pointDate(p)))} • ${fmtValue(Number(p[valueField]))}</title></circle>`:"").join("");
+  return `<svg class="professional-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escape(label)}"><defs><linearGradient id="${chartId}" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="var(--chart-accent)" stop-opacity=".24"/><stop offset="100%" stop-color="var(--chart-accent)" stop-opacity="0"/></linearGradient></defs>${grid}<polygon class="chart-area" points="${area}" fill="url(#${chartId})"/><polyline class="chart-line" points="${line}"/>${markers}${xlabels}</svg>`;
 }
 function xirr(flows) {
   if (flows.length < 2 || !flows.some(f => f.amount < 0) || !flows.some(f => f.amount > 0)) return null;
@@ -111,22 +120,15 @@ function statusText(record) {
   const source = record?.source || "fonte não informada"; const quality = record?.source_quality || record?.quality || "qualidade não informada";
   return `${source} • ${quality}`;
 }
-async function loadQuotes(revision, snapshot) {
-  for(let offset=0;offset<snapshot.length;offset+=4){
-    if(revision!==dataRevision)return;
-    await Promise.all(snapshot.slice(offset,offset+4).map(async p=>{
-      if(!apiTypes.has(p.asset_type))return;
-      try{const response=await api("/api/v1/assets/"+encodeURIComponent(p.ticker)+"?asset_type="+encodeURIComponent(p.asset_type));
-        if(revision!==dataRevision)return;
-        const data=response.data||response;if(Number(data.price)>0)quotes[assetKey(p)]=data;
-      }catch(_){}
-    }));
-    if(revision===dataRevision)render();
-  }
+async function loadQuotes(revision,snapshot){
+  const queue=snapshot.filter(p=>apiTypes.has(p.asset_type)&&!Number(quotes[assetKey(p)]?.price));
+  quoteProgress={done:0,total:queue.length,failed:0};render();let cursor=0;
+  async function worker(){while(cursor<queue.length){const p=queue[cursor++];if(revision!==dataRevision)return;try{const response=await api("/api/v1/assets/"+encodeURIComponent(p.ticker)+"?asset_type="+encodeURIComponent(p.asset_type));if(revision!==dataRevision)return;const data=response.data||response;if(Number(data.price)>0)quotes[assetKey(p)]=data;else quoteProgress.failed++;}catch(_){quoteProgress.failed++;}if(revision!==dataRevision)return;quoteProgress.done++;render();}}
+  await Promise.all(Array.from({length:Math.min(6,queue.length)},worker));if(revision===dataRevision){quoteProgress=null;render();}
 }
 async function loadData(){
   const revision=++dataRevision;
-  const [p,t]=await Promise.all([supabase.from("positions").select("*").order("ticker"),supabase.from("transactions").select("*").order("traded_at")]);
+  const [p,t]=await Promise.all([supabase.from("positions").select("id,ticker,asset_type,quantity,average_price").order("ticker"),supabase.from("transactions").select("id,position_id,ticker,asset_type,operation,traded_at,quantity,unit_price,total_value,notes").order("traded_at")]);
   if(revision!==dataRevision||!currentUser)return;
   if(p.error||t.error){message("#app-message","Não foi possível carregar seus dados privados.",true);return;}
   positions=p.data||[];transactions=t.data||[];
@@ -138,11 +140,11 @@ function render() {
   const invested = positions.reduce((sum, p) => sum + number(p.average_price) * number(p.quantity), 0);
   const marketValue = positions.reduce((sum, p) => sum + positionValue(p), 0);
   $("#total-invested").textContent = money.format(invested); $("#total-value").textContent = money.format(marketValue); $("#total-assets").textContent = positions.length;
-  $("#market-status").textContent = `${Object.keys(quotes).length} de ${positions.length} ativos com cotação da API`; $("#updated-at").textContent = positions.length ? "Dados pessoais carregados; cotações conforme cobertura da API." : "Cadastre uma posição e as transações reais para medir a rentabilidade.";
+  $("#market-status").textContent = quoteProgress?`Carregando cotações ${quoteProgress.done}/${quoteProgress.total}…`:positions.length?`${Object.keys(quotes).length} de ${positions.length} posições com cotação`:`Sua carteira ainda não tem ativos.`; $("#updated-at").textContent = positions.length ? "Dados pessoais carregados; cotações conforme cobertura da API." : "Cadastre uma posição e as transações reais para medir a rentabilidade.";
   const list = $("#positions-list");
   const term = ($("#position-search").value || "").trim().toUpperCase(), filter = $("#position-filter").value;
   const shown = positions.filter(p => (!filter || p.asset_type === filter) && p.ticker.includes(term));
-  list.innerHTML = shown.length ? shown.map(p => { const quote = quotes[assetKey(p)]; return `<div class="position-row"><div><div class="ticker">${escape(p.ticker)}</div><div class="asset-type">${types[p.asset_type] || escape(p.asset_type)}</div></div><div class="asset-meta">${number(p.quantity).toLocaleString("pt-BR")} unidades<br>PM ${money.format(p.average_price)}</div><div class="value"><strong>${money.format(positionValue(p))}</strong><small>${quote?.price ? `Cotação: ${money.format(quote.price)}` : "Sem cotação: preço médio"}</small></div><div class="row-actions"><button class="secondary analyze" data-id="${p.id}">Analisar</button><button class="secondary transact" data-id="${p.id}">Transação</button><button class="secondary edit" data-id="${p.id}">Editar</button></div></div>`; }).join("") : '<p class="empty">Nenhuma posição encontrada.</p>';
+  list.innerHTML = shown.length ? shown.map(p => { const quote = quotes[assetKey(p)]; return `<div class="position-row"><div><div class="ticker">${escape(p.ticker)}</div><div class="asset-type">${types[p.asset_type] || escape(p.asset_type)}</div></div><div class="asset-meta">${number(p.quantity).toLocaleString("pt-BR")} unidades<br>PM ${money.format(p.average_price)}</div><div class="value"><strong>${money.format(positionValue(p))}</strong><small>${quote?.price ? `Cotação: ${money.format(quote.price)}` : "Sem cotação: preço médio"}</small></div><div class="row-actions"><button class="secondary analyze" data-id="${p.id}">Abrir análise</button><button class="secondary transact" data-id="${p.id}">Transação</button><button class="secondary edit" data-id="${p.id}">Editar</button></div></div>`; }).join("") : '<p class="empty">Nenhuma posição encontrada.</p>';
   document.querySelectorAll(".analyze").forEach(b => b.onclick = () => openAsset(positions.find(p => p.id === b.dataset.id)));
   document.querySelectorAll(".transact").forEach(b => b.onclick = () => openTransaction(positions.find(p => p.id === b.dataset.id)));
   document.querySelectorAll(".edit").forEach(b => b.onclick = () => openPosition(positions.find(p => p.id === b.dataset.id)));
@@ -180,66 +182,32 @@ function openTransaction(p) { $("#transaction-form").reset(); $("#transaction-da
 async function personalValuation(p, method) { const result = await supabase.from("personal_valuations").select("*").eq("ticker", p.ticker).eq("asset_type", p.asset_type).eq("method", method).maybeSingle(); return result.data; }
 async function saveValuation(p, method, ceiling, assumptions) { if(p.asset_type!=="stock")throw new Error("Metodologias somente para ações."); const { error } = await supabase.from("personal_valuations").upsert({ ticker:p.ticker, asset_type:p.asset_type, method, ceiling_price:ceiling, assumptions }, { onConflict:"user_id,ticker,asset_type,method" }); if (error) throw error; }
 function assetIdentity(p,asset={}){
-  const identity=$("#asset-identity");identity.replaceChildren();
-  const logo=asset.logo_url||p.logo_url;
-  const mark=document.createElement("span");mark.className="asset-logo";mark.textContent=p.ticker.slice(0,2);
-  if(typeof logo==="string"&&logo.startsWith("https://")){const image=document.createElement("img");image.src=logo;image.alt="";image.referrerPolicy="no-referrer";image.onerror=()=>image.remove();mark.append(image);}
-  const info=document.createElement("div");const price=asset.price??p.price;
-  info.textContent=[asset.name||p.name||p.ticker,asset.classification?.sector||p.sector,price!=null?money.format(price):null].filter(Boolean).join(" • ");
-  identity.append(mark,info);
+  const identity=$("#asset-identity");identity.replaceChildren();const logo=asset.logo_url||p.logo_url,mark=document.createElement("span");mark.className="asset-logo";mark.textContent=p.ticker.slice(0,2);
+  if(typeof logo==="string"&&logo.startsWith("https://")){const image=document.createElement("img");image.src=logo;image.alt="";image.referrerPolicy="no-referrer";image.loading="lazy";image.onerror=()=>image.remove();mark.append(image);}identity.append(mark);
+  $("#asset-title").textContent=p.ticker+" • "+(types[p.asset_type]||p.asset_type);
+  $("#asset-subtitle").textContent=[asset.name||p.name||"",asset.classification?.sector||p.sector||"",asset.classification?.subsector||p.subsector||""].filter(Boolean).join(" • ")||"Dados da carteira e do mercado";
+  const price=asset.price??p.price??quotes[assetKey(p)]?.price;$("#asset-current-price").textContent=price!=null?money.format(Number(price)):"Indisponível";$("#asset-price-reference").textContent=asset.updated_at?"Referência: "+displayDate(asset.updated_at):"Cotação conforme cobertura da API";
 }
 function assetIndicators(p,asset){
-  $("#asset-indicators").innerHTML=Object.entries(asset.indicators||{}).map(([k,v])=>`<article class="valuation"><span>${escape(k.toUpperCase())}</span><strong>${v==null?"N/D":escape(v)}</strong></article>`).join("");
-  if (p.asset_type === "stock") {
-    const capital = asset.share_capital || {};
-    const integer = new Intl.NumberFormat("pt-BR", {maximumFractionDigits:0});
-    const shares = v => v != null && Number.isSafeInteger(Number(v)) && Number(v)>=0 ? integer.format(Number(v)) : "Não confirmado";
-    $("#asset-indicators").insertAdjacentHTML("beforeend", `<article class="valuation"><span>Ações informadas do ticker</span><strong>${shares(capital.ticker_shares)}</strong></article><article class="valuation"><span>Total de ações da empresa</span><strong>${shares(capital.company_shares)}</strong><span>${capital.reference_date ? "Ref. "+escape(capital.reference_date)+" • "+escape(capital.source||"") : "Pendente de conciliação oficial"}</span><span>${capital.status === 'ESTIMATIVA_YAHOO' ? 'Yahoo: total implícito estimado, não capital emitido confirmado.' : 'Não somar entre classes do mesmo emissor.'}</span></article>`);
-  }
-
+  const indicators=asset.indicators||{};$("#asset-indicators").innerHTML=Object.entries(indicators).map(([k,v])=>`<article class="stat"><span>${escape(k.toUpperCase())}</span><strong>${v==null?"N/D":escape(v)}</strong><small>Indicador retornado pelo Robô</small></article>`).join("");
+  if(p.asset_type==="stock"){const capital=asset.share_capital||{},integer=new Intl.NumberFormat("pt-BR",{maximumFractionDigits:0}),shares=v=>v!=null&&Number.isSafeInteger(Number(v))&&Number(v)>=0?integer.format(Number(v)):"Não confirmado";$("#asset-indicators").insertAdjacentHTML("beforeend",`<article class="stat"><span>Ações do ticker</span><strong>${shares(capital.ticker_shares)}</strong><small>${capital.reference_date?"Referência "+escape(capital.reference_date):"Sem conciliação confirmada"}</small></article><article class="stat"><span>Total de ações da empresa</span><strong>${shares(capital.company_shares)}</strong><small>${capital.status==="ESTIMATIVA_YAHOO"?"Estimativa Yahoo; não equivale ao capital emitido confirmado.":"Não somar entre classes do mesmo emissor."}</small></article>`);}
 }
-async function openAsset(p){
-  if(!p||!currentUser)return;
-  const revision=++assetRevision, owner=currentUser.id;
-  const valid=()=>revision===assetRevision&&currentUser?.id===owner&&$("#asset-dialog").open;
-  window.activeAsset=p;
-  $("#asset-add").hidden=!!p.id;
-  $("#asset-add").onclick=()=>{$("#asset-dialog").close();openPosition(null,p);};
-  $("#asset-valuation").hidden=p.asset_type!=="stock";$("#asset-method-section").hidden=p.asset_type!=="stock";
-  $("#asset-valuation").onclick=()=>{if(p.asset_type!=="stock")return;$("#asset-dialog").close();$("#method-ticker").value=p.ticker;$("#method-class").value="stock";location.hash="metodologias";$("#method-search").requestSubmit();};
-  $("#asset-title").textContent=p.ticker+" • "+(types[p.asset_type]||p.asset_type);
-  if(!$("#asset-dialog").open)$("#asset-dialog").showModal();
-  assetIdentity(p,quotes[assetKey(p)]||{});
-  $("#asset-indicators").textContent="Carregando indicadores…";
-  $("#asset-return").textContent="—";$("#asset-return-detail").textContent="";
-  for(const id of ["asset-price-chart","asset-wealth-chart","asset-income","asset-events"])$("#"+id).textContent="Carregando…";
-  const initiallyOpen = new Set(["asset-income-panel","asset-events-panel"]);
-  for(const id of ["asset-return-panel","asset-wealth-panel","asset-income-panel","asset-events-panel"]){const panel=$("#"+id);panel.ontoggle=null;panel.open=initiallyOpen.has(id);}
-  $("#asset-methods").replaceChildren();void renderMethods(p,{});
-  message("#asset-status","Consultando cotação e indicadores…");
-  if(!apiTypes.has(p.asset_type)){message("#asset-status","Classe sem integração de mercado.",true);$("#asset-indicators").textContent="Indisponível";return;}
-  const path="/api/v1/assets/"+encodeURIComponent(p.ticker), type=encodeURIComponent(p.asset_type), days=Number($("#period").value||120);
-  const query="?asset_type="+type+"&days="+days;
-  const tasks=new Map();
-  const get=(suffix)=>{if(!tasks.has(suffix))tasks.set(suffix,api(path+suffix+query));return tasks.get(suffix);};
-  const history=()=>get("/history").then(normalizedList);
-  const events=()=>get("/corporate-events").then(normalizedList);
-  function bind(id,target,fn){
-    const panel=$("#"+id);let busy=false,done=false;
-    panel.ontoggle=async()=>{if(!panel.open||busy||done||!valid())return;busy=true;$("#"+target).textContent="Consultando…";
-      try{await fn();done=true;}catch(e){if(valid())$("#"+target).textContent=e.message+" Feche e reabra para tentar novamente.";tasks.clear();}finally{busy=false;}
-    };
-  }
-  bind("asset-return-panel","asset-return-detail",async()=>{const r=await get("/performance");if(!valid())return;const v=r.data?.simple_total_return_percent;$("#asset-return").textContent=v!=null&&Number.isFinite(Number(v))?Number(v).toFixed(2)+"%":"N/D";$("#asset-return-detail").textContent="Retorno de uma unidade, sem custos ou impostos.";});
-  bind("asset-wealth-panel","asset-wealth-chart",async()=>{if(!transactions.some(t=>t.ticker===p.ticker&&t.asset_type===p.asset_type)){if(valid())$("#asset-wealth-chart").textContent="Registre compras e vendas para formar o patrimônio pessoal.";return;}const [rows,ev]=await Promise.all([history(),events()]);if(!valid())return;const points=rows.map(x=>({date:pointDate(x),wealth:eventAdjustedQuantity(p,pointDate(x),ev)*pointPrice(x)})).filter(x=>x.date);$("#asset-wealth-chart").innerHTML=svgChart(points,"wealth","Patrimônio do ativo");});
-  bind("asset-income-panel","asset-income",async()=>{const personal=transactions.some(t=>t.ticker===p.ticker&&t.asset_type===p.asset_type);const [rows,ev]=await Promise.all([get("/income").then(normalizedList),personal?events():Promise.resolve([])]);if(valid())renderIncome(p,rows,ev);});
-  bind("asset-events-panel","asset-events",async()=>{const rows=await events();if(valid())renderEvents(rows);});
-  $("#asset-income-panel").dispatchEvent(new Event("toggle"));
-  $("#asset-events-panel").dispatchEvent(new Event("toggle"));
-  // Dados de identificação e gráfico independentes; nenhum espera o outro.
-  const detail=api(path+"?asset_type="+type).then(r=>{if(!valid())return;const asset=r.data||r;assetIdentity(p,asset);assetIndicators(p,asset);message("#asset-status",asset.updated_at?"Referência da cotação: "+asset.updated_at:"Dados disponíveis do Robô.");}).catch(e=>{if(valid()){message("#asset-status",e.message,true);$("#asset-indicators").textContent="Indicadores temporariamente indisponíveis."; }});
-  const chart=history().then(rows=>{if(!valid())return;const points=rows.map(x=>({date:pointDate(x),price:pointPrice(x)})).filter(x=>x.date&&x.price>0);$("#asset-price-chart").innerHTML=svgChart(points,"price","Evolução do preço");}).catch(e=>{if(valid())$("#asset-price-chart").textContent=e.message;tasks.delete("/history");});
-  await Promise.allSettled([detail,chart]);
+function setAssetPeriod(days){selectedDays=Number(days);document.querySelectorAll("[data-period-days]").forEach(button=>button.setAttribute("aria-pressed",String(Number(button.dataset.periodDays)===selectedDays)));}
+function openAsset(p){if(!p||!currentUser)return;currentAsset={...p};window.activeAsset=currentAsset;const hash=`#ativo/${encodeURIComponent(p.asset_type)}/${encodeURIComponent(p.ticker)}`;if(location.hash!==hash)location.hash=hash;else renderAssetPage(currentAsset);}
+function restoreActiveAsset(){const match=location.hash.match(/^#ativo\/([^/]+)\/(.+)$/);if(!match||!currentUser)return;let kind,ticker;try{kind=decodeURIComponent(match[1]);ticker=decodeURIComponent(match[2]);}catch{return;}const item=positions.find(p=>p.ticker===ticker&&p.asset_type===kind)||(currentAsset?.ticker===ticker&&currentAsset?.asset_type===kind?currentAsset:null)||{ticker,asset_type:kind};if(item.ticker===ticker&&item.asset_type===kind)openAsset(item);}
+async function renderAssetPage(p){if(!currentUser)return;currentAsset={...p};window.activeAsset=currentAsset;const revision=++assetRevision,owner=currentUser.id,valid=()=>revision===assetRevision&&currentUser?.id===owner&&currentAsset?.ticker===p.ticker&&location.hash.startsWith("#ativo/");const owned=positions.find(x=>x.ticker===p.ticker&&x.asset_type===p.asset_type),path="/api/v1/assets/"+encodeURIComponent(p.ticker),type=encodeURIComponent(p.asset_type),query="?asset_type="+type+"&days="+selectedDays,get=suffix=>api(path+suffix+query);
+  $("#asset-add").hidden=!!owned;$("#asset-add").onclick=()=>openPosition(null,p);$("#asset-valuation").hidden=p.asset_type!=="stock";$("#asset-method-section").hidden=p.asset_type!=="stock";
+  const goMethods=()=>{if(p.asset_type!=="stock")return;$("#method-ticker").value=p.ticker;$("#method-class").value="stock";location.hash="metodologias";$("#method-search").requestSubmit();};$("#asset-valuation").onclick=goMethods;$("#asset-valuation-inline").onclick=goMethods;
+  $(".transact-current").onclick=()=>{if(owned)openTransaction(owned);else message("#app-message","Adicione este ativo à carteira antes de registrar uma operação.",true);};
+  setAssetPeriod(selectedDays);assetIdentity(p,quotes[assetKey(p)]||{});$("#asset-return").textContent="—";$("#asset-return-detail").textContent="Calculado com histórico real";$("#asset-indicators").innerHTML='<article class="stat skeleton"><span>Fundamentos</span><strong>Carregando…</strong></article>';$("#asset-price-chart").innerHTML='<div class="chart-loading"><span class="loader"></span>Carregando histórico de preços…</div>';$("#asset-price-summary").replaceChildren();
+  $("#asset-position-summary").innerHTML=owned?`<div><span>Quantidade</span><strong>${number(owned.quantity).toLocaleString("pt-BR")}</strong></div><div><span>Preço médio</span><strong>${money.format(number(owned.average_price))}</strong></div><div><span>Valor estimado</span><strong>${money.format(positionValue(owned))}</strong></div>`:'<p>Este ativo ainda não está na sua carteira. Adicione-o para acompanhar seu patrimônio e registrar transações.</p>';
+  $("#asset-wealth-chart").innerHTML=owned?'<p class="empty">Carregando patrimônio desta posição…</p>':'<p class="empty">Adicione o ativo à carteira para acompanhar seu patrimônio.</p>';$("#asset-methods").replaceChildren();$("#asset-income-panel").dataset.loaded="";$("#asset-events-panel").dataset.loaded="";
+  $("#asset-income-panel").ontoggle=async()=>{const panel=$("#asset-income-panel");if(!panel.open||panel.dataset.loaded===p.ticker)return;panel.dataset.loaded=p.ticker;$("#asset-income").innerHTML='<div class="chart-loading"><span class="loader"></span>Carregando proventos…</div>';try{const [income,events]=await Promise.all([get("/income"),transactions.some(t=>t.ticker===p.ticker&&t.asset_type===p.asset_type)?get("/corporate-events"):Promise.resolve({data:[]})]);if(valid())renderIncome(p,normalizedList(income),normalizedList(events));}catch(e){if(valid())$("#asset-income").innerHTML='<p class="error">'+escape(e.message)+'.</p>';}};
+  $("#asset-events-panel").ontoggle=async()=>{const panel=$("#asset-events-panel");if(!panel.open||panel.dataset.loaded===p.ticker)return;panel.dataset.loaded=p.ticker;$("#asset-events").innerHTML='<div class="chart-loading"><span class="loader"></span>Carregando eventos…</div>';try{const events=await get("/corporate-events");if(valid())renderEvents(normalizedList(events));}catch(e){if(valid())$("#asset-events").innerHTML='<p class="error">'+escape(e.message)+'.</p>';}};
+  if(!apiTypes.has(p.asset_type)){message("#asset-status","Consulta de mercado indisponível para esta classe.",true);return;}message("#asset-status","Carregando cotação e indicadores…");
+  const details=api(path+"?asset_type="+type).then(response=>{if(!valid())return;const asset=response.data||response;assetIdentity(p,asset);assetIndicators(p,asset);message("#asset-status",asset.updated_at?"Última atualização: "+displayDate(asset.updated_at):"Dados retornados pelo Robô.");}).catch(e=>{if(valid()){message("#asset-status",e.message,true);$("#asset-indicators").innerHTML='<article class="stat"><span>Fundamentos</span><strong>Indisponíveis</strong><small>Tente novamente mais tarde.</small></article>';}});
+  const history=get("/history").then(async response=>{if(!valid())return;const rows=normalizedList(response),points=rows.map(row=>({date:pointDate(row),price:pointPrice(row)})).filter(row=>row.date&&row.price>0).sort((a,b)=>a.date.localeCompare(b.date));$("#asset-price-chart").innerHTML=svgChart(points,"price","Histórico de preço de "+p.ticker);if(points.length){const first=points[0],last=points.at(-1),change=Number(first.price)?(Number(last.price)/Number(first.price)-1)*100:null;$("#asset-price-summary").innerHTML=`<div><span>Primeiro registro</span><strong>${money.format(first.price)}</strong><small>${displayDate(first.date)}</small></div><div><span>Último registro</span><strong>${money.format(last.price)}</strong><small>${displayDate(last.date)}</small></div><div><span>Variação no período</span><strong class="${change>=0?"positive":"negative"}">${change==null?"N/D":(change>=0?"+":"")+change.toFixed(2)+"%"}</strong><small>Entre os registros retornados</small></div>`;$("#asset-return").textContent=change==null?"N/D":(change>=0?"+":"")+change.toFixed(2)+"%";$("#asset-return-detail").textContent="Variação entre primeiro e último registro.";}if(owned){const historyTransactions=transactions.filter(t=>t.ticker===p.ticker&&t.asset_type===p.asset_type&&["buy","sell","adjustment"].includes(t.operation));if(!historyTransactions.length){$("#asset-wealth-chart").innerHTML='<p class="empty">Sem transações registradas para calcular a evolução desta posição.</p>';return;}try{const events=normalizedList(await get("/corporate-events"));if(!valid())return;const wealth=points.map(point=>({date:point.date,value:eventAdjustedQuantity(owned,point.date,events)*point.price}));$("#asset-wealth-chart").innerHTML=svgChart(wealth,"value","Evolução patrimonial de "+p.ticker);}catch{$("#asset-wealth-chart").innerHTML='<p class="empty">Histórico pessoal indisponível para este ativo.</p>';}}}).catch(e=>{if(valid())$("#asset-price-chart").innerHTML='<p class="error">'+escape(e.message)+" Histórico temporariamente indisponível.</p>";});
+  await Promise.allSettled([details,history]);if(valid()&&owned&&!transactions.some(t=>t.ticker===p.ticker&&t.asset_type===p.asset_type))$("#asset-wealth-chart").innerHTML='<p class="empty">Sem transações reais para montar a evolução desta posição.</p>';
 }
 function unavailable(title, reason) { return `<article class="valuation unavailable"><span>${escape(title)}</span><strong>Indisponível</strong><span>${escape(reason)}</span></article>`; }
 function renderIncome(p, incomes, events) {
@@ -251,38 +219,28 @@ async function renderMethods(p, asset) {
   const container=$("#asset-methods"); container.replaceChildren();
   if(p.asset_type!=="stock")return;
   const button=document.createElement("button");button.className="primary";button.textContent="Abrir central de metodologias";
-  button.onclick=()=>{$("#asset-dialog").close();$("#method-ticker").value=p.ticker;$("#method-class").value=p.asset_type;location.hash="metodologias";$("#method-search").requestSubmit();};
+  button.onclick=()=>{$("#method-ticker").value=p.ticker;$("#method-class").value=p.asset_type;location.hash="metodologias";$("#method-search").requestSubmit();};
   container.append(button);
 }
-async function openPerformance(showDialog=true) {
-  if (showDialog===true && !$("#performance-dialog").open) $("#performance-dialog").showModal(); $("#portfolio-twr").textContent = "N/D"; $("#portfolio-xirr").textContent = "N/D"; message("#performance-status", "Calculando apenas com as suas transações e preços da API…"); $("#portfolio-chart").innerHTML = "";
-  if (!transactions.length) { message("#performance-status", "Registre transações reais para calcular TWR e XIRR. Nenhum valor foi inventado.", true); return; }
-  const days = Number($("#period").value || 120); const series = {}, events = {};
-  const assets=positions.filter(p=>apiTypes.has(p.asset_type));
-  for(let offset=0;offset<assets.length;offset+=4){
-    await Promise.all(assets.slice(offset,offset+4).map(async p=>{
-      const key=assetKey(p),type=encodeURIComponent(p.asset_type),ticker=encodeURIComponent(p.ticker);
-      try{
-        const [h,e]=await Promise.all([
-          api(`/api/v1/assets/${ticker}/history?asset_type=${type}&days=${days}`),
-          api(`/api/v1/assets/${ticker}/corporate-events?asset_type=${type}&days=${days}`)
-        ]);
-        series[key]=normalizedList(h);events[key]=normalizedList(e);
-      }catch(_){series[key]=[];events[key]=[];}
-    }));
-  }
-  if (positions.some(p=>!series[assetKey(p)]?.length)) {message("#performance-status","Histórico incompleto para uma ou mais posições; cálculo bloqueado.",true);return;}
-  const points = portfolioHistory(series, events); const flows = transactions.map(t => ({ date:t.traded_at, amount:t.operation === "buy" || t.operation === "fee" ? -transactionTotal(t) : t.operation === "sell" || t.operation === "dividend" ? transactionTotal(t) : 0 })).filter(f => f.amount); const last = points.at(-1); if (last) flows.push({ date:last.date, amount:last.value }); const twrValue = twr(points), xirrValue = xirr(flows);
-  $("#portfolio-twr").textContent = twrValue == null ? "Indisponível" : `${twrValue.toFixed(2)}%`; $("#portfolio-xirr").textContent = xirrValue == null ? "Indisponível" : `${(xirrValue * 100).toFixed(2)}% a.a.`; $("#portfolio-chart").innerHTML = svgChart(points, "value", "Patrimônio pessoal"); message("#performance-status", points.length ? `Série pessoal: ${points.length} datas. TWR usa fluxo externo no fim do dia; XIRR usa compras, vendas, proventos, custos e valor final.` : "Não há preços históricos suficientes para montar a série pessoal.", !points.length);
+async function openPerformance(){
+  const ticket=++portfolioRequest,owner=currentUser?.id,days=selectedDays;$("#portfolio-twr").textContent="—";$("#portfolio-xirr").textContent="—";$("#portfolio-chart").innerHTML='<div class="chart-loading"><span class="loader"></span>Consultando histórico da carteira…</div>';
+  if(!transactions.length){$("#portfolio-chart").innerHTML='<div class="chart-empty"><span>◌</span><p>Registre transações reais para calcular o desempenho da carteira.</p></div>';message("#performance-status","Ainda não há transações suficientes para calcular TWR e XIRR.",true);return;}
+  const series={},events={},assets=positions.filter(p=>apiTypes.has(p.asset_type));let completed=0;message("#performance-status",`Consultando ${assets.length} ativos para o período de ${days} dias…`);
+  for(let offset=0;offset<assets.length;offset+=4){if(ticket!==portfolioRequest||currentUser?.id!==owner)return;await Promise.all(assets.slice(offset,offset+4).map(async p=>{const key=assetKey(p),type=encodeURIComponent(p.asset_type),ticker=encodeURIComponent(p.ticker);try{const [h,e]=await Promise.all([api(`/api/v1/assets/${ticker}/history?asset_type=${type}&days=${days}`),api(`/api/v1/assets/${ticker}/corporate-events?asset_type=${type}&days=${days}`)]);series[key]=normalizedList(h);events[key]=normalizedList(e);}catch(_){series[key]=[];events[key]=[];}completed++;if(ticket===portfolioRequest)message("#performance-status",`Histórico consultado: ${completed}/${assets.length} ativos.`);}));}
+  if(ticket!==portfolioRequest||currentUser?.id!==owner)return;if(!assets.length||assets.some(p=>!series[assetKey(p)]?.length)){message("#performance-status","Histórico incompleto para uma ou mais posições. Rentabilidade bloqueada para evitar um resultado enganoso.",true);$("#portfolio-chart").innerHTML='<div class="chart-empty"><span>!</span><p>Faltam séries de preços para este período.</p></div>';return;}
+  const points=portfolioHistory(series,events),flows=transactions.map(t=>({date:t.traded_at,amount:t.operation==="buy"||t.operation==="fee"?-transactionTotal(t):t.operation==="sell"||t.operation==="dividend"?transactionTotal(t):0})).filter(f=>f.amount);const last=points.at(-1);if(last)flows.push({date:last.date,amount:last.value});const tv=twr(points),xv=xirr(flows);
+  $("#portfolio-twr").textContent=tv==null?"Indisponível":`${tv.toFixed(2)}%`;$("#portfolio-xirr").textContent=xv==null?"Indisponível":`${(xv*100).toFixed(2)}% a.a.`;$("#portfolio-chart").innerHTML=svgChart(points,"value","Evolução do patrimônio da carteira");message("#performance-status",points.length?`Série real: ${points.length} datas • janela de ${days} dias.`:"Não há histórico suficiente para este período.",!points.length);
+  if(location.hash==="#patrimonio"){$("#wealth-inline").innerHTML=$("#portfolio-chart").innerHTML;$("#wealth-status").textContent=$("#performance-status").textContent;}
+  if(location.hash==="#dashboard"){$("#dash-wealth").innerHTML=$("#portfolio-chart").innerHTML;$("#dash-wealth").dataset.loaded="true";$("#dash-history-status").textContent=$("#performance-status").textContent;$("#dash-return").textContent=$("#portfolio-twr").textContent;}
 }
 function setupAuth() {
   document.querySelectorAll(".tab").forEach(b => b.onclick = () => { document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === b)); $("#login-form").classList.toggle("hidden", b.dataset.tab !== "login"); $("#signup-form").classList.toggle("hidden", b.dataset.tab !== "signup"); });
   $("#login-form").onsubmit = async e => { e.preventDefault(); const { error } = await supabase.auth.signInWithPassword({ email:$("#login-email").value, password:$("#login-password").value }); message("#auth-message", error?.message || "", !!error); };
   $("#signup-form").onsubmit = async e => { e.preventDefault(); const { data, error } = await supabase.auth.signUp({ email:$("#signup-email").value, password:$("#signup-password").value, options:{ data:{ full_name:$("#signup-name").value }, emailRedirectTo:window.location.href } }); message("#auth-message", error?.message || (data.session ? "Conta criada." : "Conta criada. Confirme o e-mail."), !!error); };
 }
-$("#new-position").onclick = () => { location.hash="mercado"; }; $("#portfolio-performance").onclick = () => openPerformance();
+$("#new-position").onclick = () => { location.hash="mercado"; }; $("#portfolio-performance").onclick = () => { location.hash="rentabilidade"; }; $("#performance-refresh").onclick=()=>openPerformance();
 document.querySelectorAll("[data-close]").forEach(button => button.onclick = () => $(button.dataset.close).close());
-$("#period").onchange = () => { if ($("#asset-dialog").open) openAsset(window.activeAsset); };
+
 $("#position-form").onsubmit = async e => { e.preventDefault(); const id=$("#position-id").value, payload={ ticker:$("#position-ticker").value.trim().toUpperCase(), asset_type:$("#position-type").value, quantity:number($("#position-quantity").value), average_price:number($("#position-average").value) }; const result=id ? await supabase.from("positions").update(payload).eq("id",id) : await supabase.from("positions").insert(payload); if (result.error) return message("#position-message",result.error.message,true); $("#position-dialog").close(); await loadData(); };
 $("#transaction-category").onchange=()=>updateTransactionAssets();
 $("#transaction-asset-search").onchange=()=>{const item=positions.find(p=>p.asset_type===$("#transaction-category").value&&p.ticker.toUpperCase()===$("#transaction-asset-search").value.trim().toUpperCase());if(item){updateTransactionAssets(item.ticker);$("#transaction-price").value=quotes[assetKey(item)]?.price??item.average_price??"";}else{$("#transaction-position").value="";$("#transaction-ticker").value="";$("#transaction-type").value=$("#transaction-category").value;}updateTransactionTotal();};
@@ -290,5 +248,5 @@ $("#transaction-mode").querySelectorAll("[data-transaction-mode]").forEach(b=>b.
 ["#transaction-extra-operation","#transaction-extra-total","#transaction-price","#transaction-quantity","#transaction-brokerage","#transaction-fees"].forEach(id=>{ $(id).addEventListener("input",updateTransactionTotal);$(id).addEventListener("change",updateTransactionTotal); });
 $("#transaction-form").onsubmit = async e => { e.preventDefault(); if(!$("#transaction-position").value)return message("#transaction-message","Selecione um ativo já cadastrado na sua carteira.",true); const op=$("#transaction-operation").value, brokerage=number($("#transaction-brokerage").value), fees=number($("#transaction-fees").value); const extraCosts=(op==="buy"||op==="sell")&&(brokerage||fees)?`Custos — corretagem ${money.format(brokerage)}; taxas ${money.format(fees)}.`:""; const note=[$("#transaction-notes").value.trim().slice(0,150),extraCosts].filter(Boolean).join(" ").slice(0,250); const payload={ position_id:$("#transaction-position").value, ticker:$("#transaction-ticker").value, asset_type:$("#transaction-type").value, operation:op, traded_at:$("#transaction-date").value, quantity:op==="buy"||op==="sell"?number($("#transaction-quantity").value):null, unit_price:op==="buy"||op==="sell"?number($("#transaction-price").value):null, total_value:number($("#transaction-total").value), notes:note||null }; const {error}=await supabase.from("transactions").insert(payload); if(error)return message("#transaction-message",error.message,true); $("#transaction-dialog").close(); await loadData(); };
 setupAuth();
-setupWorkspace({ api, saveValuation, personalValuation, render, openPerformance, openAsset, openPosition, getPositions:()=>positions, getUser:()=>currentUser, logout:()=>supabase.auth.signOut() });
-supabase.auth.onAuthStateChange((_event, session) => { const previous=currentUser?.id; currentUser=session?.user || null; activeToken=session?.access_token||null; if(previous!==currentUser?.id){clearMarketCache();dataRevision++;assetRevision++;positions=[];transactions=[];quotes={};} $("#auth-view").classList.toggle("hidden",!!currentUser); $("#app-view").classList.toggle("hidden",!currentUser); if(!currentUser){ positions=[]; transactions=[]; quotes={}; $("#user-actions").replaceChildren(); resetWorkspace(); return; } $("#user-actions").innerHTML=`<span>${escape(currentUser.email)}</span><button id="logout" class="secondary">Sair</button>`; $("#logout").onclick=()=>supabase.auth.signOut(); if(previous!==currentUser.id||_event==="INITIAL_SESSION"||_event==="SIGNED_IN"&&positions.length===0) setTimeout(() => { if (currentUser?.id === session.user.id) loadData(); },0); });
+setupWorkspace({ api, saveValuation, personalValuation, render, openPerformance, openAsset, openPosition, setPeriod:days=>{selectedDays=days;setAssetPeriod(days);if(location.hash.startsWith("#ativo/"))renderAssetPage(currentAsset);else if(["#rentabilidade","#patrimonio"].includes(location.hash))openPerformance();else if(location.hash==="#dashboard"&&$("#dash-wealth").dataset.loaded==="true")openPerformance();}, getPositions:()=>positions, getUser:()=>currentUser, getActiveAsset:()=>currentAsset, restoreActiveAsset, logout:()=>supabase.auth.signOut() });
+supabase.auth.onAuthStateChange((_event, session) => { const previous=currentUser?.id; currentUser=session?.user || null; activeToken=session?.access_token||null; if(previous!==currentUser?.id){clearMarketCache();dataRevision++;assetRevision++;positions=[];transactions=[];quotes={};} $("#auth-view").classList.toggle("hidden",!!currentUser); $("#app-view").classList.toggle("hidden",!currentUser); if(!currentUser){ positions=[]; transactions=[]; quotes={}; $("#user-actions").replaceChildren(); resetWorkspace(); return; } $("#user-actions").innerHTML=`<span>${escape(currentUser.email)}</span><button id="logout" class="secondary">Sair</button>`; $("#logout").onclick=()=>supabase.auth.signOut(); if(previous!==currentUser.id||_event==="INITIAL_SESSION"||_event==="SIGNED_IN"&&positions.length===0) setTimeout(() => { if (currentUser?.id === session.user.id) { loadData().then(()=>{if(location.hash.startsWith("#ativo/"))restoreActiveAsset();else if(["#rentabilidade","#patrimonio"].includes(location.hash))openPerformance();}); } },0); });
