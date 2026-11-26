@@ -43,7 +43,7 @@ async function neonRequest(path){
     let quote=null;
     if(view==="instrumentos"){const rows=await neonRows("instrumentos",{select:"*",ticker:"eq."+ticker,limit:1});quote=rows[0];}
     else {const rows=await neonRows(view,{select:"*",ticker:"eq."+ticker,order:"data_referencia.desc",limit:1});quote=rows[0];}
-    return {data:{...mapAsset(base),...(quote||{}),asset_type:assetType}};
+    return {data:{...mapAsset(base),...(quote||{}),price:quote?.preco??quote?.fechamento??base.price??null,updated_at:quote?.data_coleta??quote?.data_referencia??base.atualizado_em??null,asset_type:assetType}};
   }
   if(parts[4]==="history"){const rows=await neonRows(view==="instrumentos"?"instrumentos":view,{select:"*",ticker:"eq."+ticker,order:"data_referencia.asc",limit:1000});return {data:rows.filter(row=>!query.get("days")||String(row.data_referencia||row.referencia_em).slice(0,10)>=neonDateFilter(query.get("days"))).map(row=>({date:row.data_referencia||row.referencia_em,price:row.preco??row.fechamento,close:row.preco??row.fechamento,source:row.fonte,source_quality:row.qualidade_fonte}))};}
   if(parts[4]==="income"){const rows=await neonRows("proventos",{select:"*",ticker:"eq."+ticker,order:"data_ex.desc",limit:1000});return {data:rows};}
