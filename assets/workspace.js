@@ -149,7 +149,6 @@ function setupCatalog(){
 export function setupWorkspace(opts){
   actions=opts;setupCatalog();window.addEventListener("hashchange",route);route();
   $("#position-search").oninput=opts.render;$("#position-filter").onchange=opts.render;$("#method-search").onsubmit=searchMethods;$("#market-refresh").onclick=market;
-  document.querySelectorAll("[data-period-days]").forEach(button=>button.onclick=()=>opts.setPeriod(Number(button.dataset.periodDays)));
   document.querySelectorAll(".history-trigger").forEach(button=>button.onclick=async()=>{button.disabled=true;button.textContent="Consultando…";await opts.openPerformance();button.disabled=false;button.textContent="Atualizar gráfico";});
 }
 export function resetWorkspace(){revision++;catalogRevision++;catalogLoaded=false;catalogRows=[];catalogPage=1;$("#catalog-list").replaceChildren();$("#catalog-status").textContent="";$("#profile-email").textContent="";for(const id of ["dash-return","dash-wealth","dash-history-status","dash-income-total","dash-transactions","method-cards","method-quote","method-facts","method-status","market-overview","wealth-inline","wealth-status","return-status","twr-inline","xirr-inline","dash-allocation","full-allocation","dash-income","income-chart","income-table","transaction-table","positions-list","transactions-list"])$("#"+id)?.replaceChildren();document.querySelectorAll("dialog[open]").forEach(d=>d.close());location.hash="dashboard";}
