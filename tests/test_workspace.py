@@ -57,6 +57,12 @@ class WorkspaceTest(unittest.TestCase):
         self.assertIn(".desktop-nav a[data-tooltip]:hover::after", css)
         self.assertIn(".desktop-nav button[data-tooltip]:focus-visible::after", css)
 
+    def test_asset_analysis_stays_inside_workspace(self):
+        html = (ROOT / "index.html").read_text()
+        self.assertLess(html.index('id="asset-screen"'), html.index('<dialog id="nav-sheet"'))
+        code = (ROOT / "assets/app.js").read_text()
+        self.assertIn("renderAssetPage(currentAsset)", code)
+
     def test_no_global_period_selector(self):
         html = (ROOT / "index.html").read_text()
         code = (ROOT / "assets/app.js").read_text()
