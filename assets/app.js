@@ -24,7 +24,9 @@ function ttlFor(path){if(path.startsWith("/api/v1/assets?"))return 60000;if(/\/(
 function neonAssetType(value){const raw=String(value||"").toLowerCase();return ({acao:"stock",acao_unit:"stock",acao_on:"stock",fii:"fii",etf:"etf",bdr:"bdr",cripto:"crypto",moeda:"currency",renda_fixa:"fixed_income"}[raw]||raw);}
 function neonDateFilter(days){const d=new Date();d.setUTCDate(d.getUTCDate()-Number(days||120));return d.toISOString().slice(0,10);}
 const neonLogoCache=new Map();
-async function neonLogos(tickers=[]){const wanted=tickers.filter(Boolean).filter(t=>!neonLogoCache.has(t));if(wanted.length){const rows=await neonRows("logos",{select:"ticker,logo_url,fonte,status",limit:1000});for(const row of rows)neonLogoCache.set(String(row.ticker).toUpperCase(),row.logo_url||null);}return tickers.map(t=>neonLogoCache.get(String(t).toUpperCase())||null);}
+const logoSourcePriority=Object.fromEntries((config.logoSourcePriority||["google_drive","google_drive_cache","neon_cache","logo_dev"]).map((source,index)=>[source,index]));
+function chooseLogoRow(rows){return [...rows].sort((a,b)=>(logoSourcePriority[a.fonte]??9)-(logoSourcePriority[b.fonte]??9))[0]||null;}
+async function neonLogos(tickers=[]){const wanted=tickers.filter(Boolean).filter(t=>!neonLogoCache.has(String(t).toUpperCase()));if(wanted.length){const rows=await neonRows("logos",{select:"ticker,logo_url,fonte,status",limit:1000});const byTicker=new Map();for(const row of rows){const key=String(row.ticker||"").toUpperCase();if(!key)continue;if(!byTicker.has(key))byTicker.set(key,[]);byTicker.get(key).push(row);}for(const [key,candidates] of byTicker)neonLogoCache.set(key,chooseLogoRow(candidates));}return tickers.map(t=>neonLogoCache.get(String(t).toUpperCase())?.logo_url||null);}
 async function neonRows(view,params={}){const url=new URL(config.dataApiUrl+"/"+view);for(const [key,value] of Object.entries(params))if(value!==undefined&&value!==null&&value!=="")url.searchParams.set(key,String(value));const response=await fetch(url,{headers:{Authorization:"Bearer "+activeToken,Accept:"application/json"}});if(!response.ok)throw new Error("Neon Data API indisponível ("+response.status+").");return response.json();}
 async function neonRequest(path){
   const parsed=new URL(path,"https://carteira.local"),parts=parsed.pathname.split("/").filter(Boolean),query=parsed.searchParams;
@@ -43,11 +45,11 @@ async function neonRequest(path){
     return {data:rows,total:filtered.length,has_more:page*size<filtered.length,sectors:[...new Set(filtered.map(x=>x.setor).filter(Boolean))].sort()};
   }
   if(parts.length===4){
-    const assets=await neonRows("ativos",{select:"*",ticker:"eq."+ticker,limit:1}),base=assets[0]||{ticker,asset_type:assetType};const logoRows=await neonRows("logos",{select:"ticker,logo_url,fonte,status",ticker:"eq."+ticker,limit:1});
+    const assets=await neonRows("ativos",{select:"*",ticker:"eq."+ticker,limit:1}),base=assets[0]||{ticker,asset_type:assetType};const logoRows=await neonRows("logos",{select:"ticker,logo_url,fonte,status",ticker:"eq."+ticker,limit:1000});const logo=chooseLogoRow(logoRows);
     let quote=null;
     if(view==="instrumentos"){const rows=await neonRows("instrumentos",{select:"*",ticker:"eq."+ticker,limit:1});quote=rows[0];}
     else {const rows=await neonRows(view,{select:"*",ticker:"eq."+ticker,order:"data_referencia.desc",limit:1});quote=rows[0];}
-    return {data:{...mapAsset(base),...(quote||{}),price:quote?.preco??quote?.fechamento??base.price??null,updated_at:quote?.data_coleta??quote?.data_referencia??base.atualizado_em??null,logo_url:logoRows[0]?.logo_url||null,indicators:{DY:quote?.dy,PL:quote?.pl,PVP:quote?.pvp,ROE:quote?.roe,VPA:quote?.vpa,LPA:quote?.lpa,MONTHLY_DIVIDEND:quote?.dividendo_mensal},asset_type:assetType}};
+    return {data:{...mapAsset(base),...(quote||{}),price:quote?.preco??quote?.fechamento??base.price??null,updated_at:quote?.data_coleta??quote?.data_referencia??base.atualizado_em??null,logo_url:logo?.logo_url||null,indicators:{DY:quote?.dy,PL:quote?.pl,PVP:quote?.pvp,ROE:quote?.roe,VPA:quote?.vpa,LPA:quote?.lpa,MONTHLY_DIVIDEND:quote?.dividendo_mensal},asset_type:assetType}};
   }
   if(parts[4]==="history"){const rows=await neonRows(view==="instrumentos"?"instrumentos":view,{select:"*",ticker:"eq."+ticker,order:"data_referencia.asc",limit:1000});return {data:rows.filter(row=>!query.get("days")||String(row.data_referencia||row.referencia_em).slice(0,10)>=neonDateFilter(query.get("days"))).map(row=>({date:row.data_referencia||row.referencia_em,price:row.preco??row.fechamento,close:row.preco??row.fechamento,source:row.fonte,source_quality:row.qualidade_fonte}))};}
   if(parts[4]==="income"){const rows=await neonRows("proventos",{select:"*",ticker:"eq."+ticker,order:"data_ex.desc",limit:1000});return {data:rows.map(row=>({...row,ex_date:row.data_ex,payment_date:row.data_pagamento,amount_per_unit:row.valor_unitario,source:row.fonte,source_quality:row.qualidade_fonte}))};}
