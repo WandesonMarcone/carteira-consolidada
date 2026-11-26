@@ -21,6 +21,37 @@ const marketCache = new Map(), marketPending = new Map();
 let marketEpoch=0, activeToken=null, dataRevision=0, assetRevision=0;
 function clearMarketCache(){marketEpoch++;marketCache.clear();marketPending.clear();}
 function ttlFor(path){if(path.startsWith("/api/v1/assets?"))return 60000;if(/\/(history|income|corporate-events|performance|fundamentals|coverage)(\?|$)/.test(path))return 120000;return 30000;}
+function neonAssetType(value){const raw=String(value||"").toLowerCase();return ({acao:"stock",acao_unit:"stock",acao_on:"stock",fii:"fii",etf:"etf",bdr:"bdr",cripto:"crypto",moeda:"currency",renda_fixa:"fixed_income"}[raw]||raw);}
+function neonDateFilter(days){const d=new Date();d.setUTCDate(d.getUTCDate()-Number(days||120));return d.toISOString().slice(0,10);}
+async function neonRows(view,params={}){const url=new URL(config.dataApiUrl+"/"+view);for(const [key,value] of Object.entries(params))if(value!==undefined&&value!==null&&value!=="")url.searchParams.set(key,String(value));const response=await fetch(url,{headers:{Authorization:"Bearer "+activeToken,Accept:"application/json"}});if(!response.ok)throw new Error("Neon Data API indisponível ("+response.status+").");return response.json();}
+async function neonRequest(path){
+  const parsed=new URL(path,"https://carteira.local"),parts=parsed.pathname.split("/").filter(Boolean),query=parsed.searchParams;
+  if(parts[0]!=="api"||parts[1]!=="v1"||parts[2]!=="assets"){
+    if(path==="/api/v1/market/overview"){return {data:await neonRows("mercado",{select:"*",limit:500})};}
+    throw new Error("Endpoint não mapeado na Neon: "+path);
+  }
+  const ticker=parts[3],assetType=neonAssetType(query.get("asset_type")),view=assetType==="stock"?"cotacoes_acoes":assetType==="fii"?"cotacoes_fiis":"instrumentos";
+  const mapAsset=row=>({...row,asset_type:neonAssetType(row.asset_type||assetType),name:row.nome||row.nome_emissor,updated_at:row.atualizado_em||row.data_coleta||row.referencia_em,price:row.preco??row.fechamento});
+  if(!ticker){
+    const all=await neonRows("ativos",{select:"*",limit:1000});
+    const q=String(query.get("q")||"").toUpperCase(),sector=query.get("sector")||"",filtered=all.filter(row=>{const type=neonAssetType(row.asset_type);return (!assetType||type===assetType)&&(!q||String(row.ticker).includes(q)||String(row.nome||"").toUpperCase().includes(q))&&(!sector||row.setor===sector);});
+    const page=Math.max(1,Number(query.get("page")||1)),size=Math.min(100,Math.max(1,Number(query.get("page_size")||24))),rows=filtered.slice((page-1)*size,page*size).map(mapAsset);
+    return {data:rows,total:filtered.length,has_more:page*size<filtered.length,sectors:[...new Set(filtered.map(x=>x.setor).filter(Boolean))].sort()};
+  }
+  if(parts.length===4){
+    const assets=await neonRows("ativos",{select:"*",ticker:"eq."+ticker,limit:1}),base=assets[0]||{ticker,asset_type:assetType};
+    let quote=null;
+    if(view==="instrumentos"){const rows=await neonRows("instrumentos",{select:"*",ticker:"eq."+ticker,limit:1});quote=rows[0];}
+    else {const rows=await neonRows(view,{select:"*",ticker:"eq."+ticker,order:"data_referencia.desc",limit:1});quote=rows[0];}
+    return {data:{...mapAsset(base),...(quote||{}),asset_type:assetType}};
+  }
+  if(parts[4]==="history"){const rows=await neonRows(view==="instrumentos"?"instrumentos":view,{select:"*",ticker:"eq."+ticker,order:"data_referencia.asc",limit:1000});return {data:rows.filter(row=>!query.get("days")||String(row.data_referencia||row.referencia_em).slice(0,10)>=neonDateFilter(query.get("days"))).map(row=>({date:row.data_referencia||row.referencia_em,price:row.preco??row.fechamento,close:row.preco??row.fechamento,source:row.fonte,source_quality:row.qualidade_fonte}))};}
+  if(parts[4]==="income"){const rows=await neonRows("proventos",{select:"*",ticker:"eq."+ticker,order:"data_ex.desc",limit:1000});return {data:rows};}
+  if(parts[4]==="corporate-events"){const rows=await neonRows("eventos_corporativos",{select:"*",ticker:"eq."+ticker,order:"data_referencia.desc",limit:1000});return {data:rows.map(row=>({...row,event_type:row.tipo,effective_date:row.data_referencia,factor:row.fator}))};}
+  if(parts[4]==="fundamentals"){const facts=await neonRows("fundamentos",{select:"*",ticker:"eq."+ticker,order:"periodo_fim.desc",limit:2000}),derived=await neonRows("indicadores_valuation",{select:"*",ticker:"eq."+ticker,order:"periodo_fim.desc",limit:1000});return {data:{facts,derived_indicators:derived}};}
+  if(parts[4]==="coverage"){return {data:[]};}
+  throw new Error("Endpoint de ativo não mapeado na Neon: "+path);
+}
 const api = async path => {
   const owner=currentUser?.id, epoch=marketEpoch, token=activeToken;
   if(!owner||!token)throw new Error("Sessão encerrada.");
@@ -30,9 +61,7 @@ const api = async path => {
   const request=(async()=>{
     const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),15000);
     try{
-      const response=await fetch(config.roboApiUrl+path,{headers:{Authorization:"Bearer "+token},signal:controller.signal});
-      if(!response.ok)throw new Error("API do Robô indisponível ("+response.status+").");
-      const value=await response.json();
+      const value=config.marketDataSource==="neon"?await neonRequest(path):await (async()=>{const response=await fetch(config.roboApiUrl+path,{headers:{Authorization:"Bearer "+token},signal:controller.signal});if(!response.ok)throw new Error("API do Robô indisponível ("+response.status+").");return response.json();})();
       if(epoch!==marketEpoch||currentUser?.id!==owner)throw new Error("Sessão alterada.");
       marketCache.delete(key);marketCache.set(key,{value,expires:Date.now()+ttlFor(path)});
       if(marketCache.size>100)marketCache.delete(marketCache.keys().next().value);
