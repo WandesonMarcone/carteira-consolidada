@@ -25,8 +25,8 @@ function neonAssetType(value){const raw=String(value||"").toLowerCase();return (
 function neonDateFilter(days){const d=new Date();d.setUTCDate(d.getUTCDate()-Number(days||120));return d.toISOString().slice(0,10);}
 const neonLogoCache=new Map();
 const logoSourcePriority=Object.fromEntries((config.logoSourcePriority||["google_drive","google_drive_cache","neon_cache","logo_dev"]).map((source,index)=>[source,index]));
-function chooseLogoRow(rows){return [...rows].sort((a,b)=>(logoSourcePriority[a.fonte]??9)-(logoSourcePriority[b.fonte]??9))[0]||null;}
-async function neonLogos(tickers=[]){const wanted=tickers.filter(Boolean).filter(t=>!neonLogoCache.has(String(t).toUpperCase()));if(wanted.length){const rows=await neonRows("logos",{select:"ticker,logo_url,fonte,status",limit:1000});const byTicker=new Map();for(const row of rows){const key=String(row.ticker||"").toUpperCase();if(!key)continue;if(!byTicker.has(key))byTicker.set(key,[]);byTicker.get(key).push(row);}for(const [key,candidates] of byTicker)neonLogoCache.set(key,chooseLogoRow(candidates));}return tickers.map(t=>neonLogoCache.get(String(t).toUpperCase())?.logo_url||null);}
+function chooseLogoRow(rows){const row=[...rows].sort((a,b)=>(logoSourcePriority[a.fonte]??9)-(logoSourcePriority[b.fonte]??9))[0]||null;if(row?.verified_public&&row.public_image_url)return {...row,logo_url:row.public_image_url};return row;}
+async function neonLogos(tickers=[]){const wanted=tickers.filter(Boolean).filter(t=>!neonLogoCache.has(String(t).toUpperCase()));if(wanted.length){const rows=await neonRows("logos",{select:"ticker,logo_url,fonte,status,public_image_url,verified_public",limit:1000});const byTicker=new Map();for(const row of rows){const key=String(row.ticker||"").toUpperCase();if(!key)continue;if(!byTicker.has(key))byTicker.set(key,[]);byTicker.get(key).push(row);}for(const [key,candidates] of byTicker)neonLogoCache.set(key,chooseLogoRow(candidates));}return tickers.map(t=>neonLogoCache.get(String(t).toUpperCase())?.logo_url||null);}
 async function neonRows(view,params={}){const url=new URL(config.dataApiUrl+"/"+view);for(const [key,value] of Object.entries(params))if(value!==undefined&&value!==null&&value!=="")url.searchParams.set(key,String(value));const response=await fetch(url,{headers:{Authorization:"Bearer "+activeToken,Accept:"application/json"}});if(!response.ok)throw new Error("Neon Data API indisponível ("+response.status+").");return response.json();}
 async function neonRequest(path){
   const parsed=new URL(path,"https://carteira.local"),parts=parsed.pathname.split("/").filter(Boolean),query=parsed.searchParams;
@@ -45,7 +45,7 @@ async function neonRequest(path){
     return {data:rows,total:filtered.length,has_more:page*size<filtered.length,sectors:[...new Set(filtered.map(x=>x.setor).filter(Boolean))].sort()};
   }
   if(parts.length===4){
-    const assets=await neonRows("ativos",{select:"*",ticker:"eq."+ticker,limit:1}),base=assets[0]||{ticker,asset_type:assetType};const logoRows=await neonRows("logos",{select:"ticker,logo_url,fonte,status",ticker:"eq."+ticker,limit:1000});const logo=chooseLogoRow(logoRows);
+    const assets=await neonRows("ativos",{select:"*",ticker:"eq."+ticker,limit:1}),base=assets[0]||{ticker,asset_type:assetType};const logoRows=await neonRows("logos",{select:"ticker,logo_url,fonte,status,public_image_url,verified_public",ticker:"eq."+ticker,limit:1000});const logo=chooseLogoRow(logoRows);
     let quote=null;
     if(view==="instrumentos"){const rows=await neonRows("instrumentos",{select:"*",ticker:"eq."+ticker,limit:1});quote=rows[0];}
     else {const rows=await neonRows(view,{select:"*",ticker:"eq."+ticker,order:"data_referencia.desc",limit:1});quote=rows[0];}
