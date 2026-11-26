@@ -71,6 +71,12 @@ class WorkspaceTest(unittest.TestCase):
         self.assertNotIn("data-period-days", html)
         self.assertIn("const selectedDays = 120;", code)
 
+    def test_asset_indicator_labels_are_human_readable(self):
+        code = (ROOT / "assets/app.js").read_text()
+        self.assertIn('DY:"Dividend Yield"', code)
+        self.assertIn('MONTHLY_DIVIDEND:"Provento mensal"', code)
+        self.assertIn('PL:"Preço/Lucro"', code)
+
     def test_lazy_asset_sections(self):
         for name in ["asset-price-chart","asset-wealth-chart","asset-income-panel","asset-events-panel","catalog-retry"]:
             self.assertIn(name, self.page.ids)
