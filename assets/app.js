@@ -43,10 +43,10 @@ async function neonRequest(path){
     let quote=null;
     if(view==="instrumentos"){const rows=await neonRows("instrumentos",{select:"*",ticker:"eq."+ticker,limit:1});quote=rows[0];}
     else {const rows=await neonRows(view,{select:"*",ticker:"eq."+ticker,order:"data_referencia.desc",limit:1});quote=rows[0];}
-    return {data:{...mapAsset(base),...(quote||{}),price:quote?.preco??quote?.fechamento??base.price??null,updated_at:quote?.data_coleta??quote?.data_referencia??base.atualizado_em??null,asset_type:assetType}};
+    return {data:{...mapAsset(base),...(quote||{}),price:quote?.preco??quote?.fechamento??base.price??null,updated_at:quote?.data_coleta??quote?.data_referencia??base.atualizado_em??null,indicators:{DY:quote?.dy,PL:quote?.pl,PVP:quote?.pvp,ROE:quote?.roe,VPA:quote?.vpa,LPA:quote?.lpa,MONTHLY_DIVIDEND:quote?.dividendo_mensal},asset_type:assetType}};
   }
   if(parts[4]==="history"){const rows=await neonRows(view==="instrumentos"?"instrumentos":view,{select:"*",ticker:"eq."+ticker,order:"data_referencia.asc",limit:1000});return {data:rows.filter(row=>!query.get("days")||String(row.data_referencia||row.referencia_em).slice(0,10)>=neonDateFilter(query.get("days"))).map(row=>({date:row.data_referencia||row.referencia_em,price:row.preco??row.fechamento,close:row.preco??row.fechamento,source:row.fonte,source_quality:row.qualidade_fonte}))};}
-  if(parts[4]==="income"){const rows=await neonRows("proventos",{select:"*",ticker:"eq."+ticker,order:"data_ex.desc",limit:1000});return {data:rows};}
+  if(parts[4]==="income"){const rows=await neonRows("proventos",{select:"*",ticker:"eq."+ticker,order:"data_ex.desc",limit:1000});return {data:rows.map(row=>({...row,ex_date:row.data_ex,payment_date:row.data_pagamento,amount_per_unit:row.valor_unitario,source:row.fonte,source_quality:row.qualidade_fonte}))};}
   if(parts[4]==="corporate-events"){const rows=await neonRows("eventos_corporativos",{select:"*",ticker:"eq."+ticker,order:"data_referencia.desc",limit:1000});return {data:rows.map(row=>({...row,event_type:row.tipo,effective_date:row.data_referencia,factor:row.fator}))};}
   if(parts[4]==="fundamentals"){const facts=await neonRows("fundamentos",{select:"*",ticker:"eq."+ticker,order:"periodo_fim.desc",limit:2000}),derived=await neonRows("indicadores_valuation",{select:"*",ticker:"eq."+ticker,order:"periodo_fim.desc",limit:1000});return {data:{facts,derived_indicators:derived}};}
   if(parts[4]==="coverage"){return {data:[]};}
